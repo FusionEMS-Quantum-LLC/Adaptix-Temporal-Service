@@ -171,8 +171,10 @@ async def test_submit_claim_missing_token_raises_runtime_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_denial_appeal_success():
+async def test_create_denial_appeal_success(monkeypatch):
     """create_denial_appeal posts the correct payload and returns JSON."""
+    monkeypatch.setenv("ADAPTIX_SERVICE_TOKEN", "test-service-token-not-a-real-secret")
+    import importlib, temporal_app.activities.billing_activities as _m; importlib.reload(_m)
     from temporal_app.activities import billing_activities
 
     response_body = {"appeal_id": "appeal-456", "status": "pending_resubmit"}
@@ -198,8 +200,10 @@ async def test_create_denial_appeal_success():
 
 
 @pytest.mark.asyncio
-async def test_process_era_file_success():
+async def test_process_era_file_success(monkeypatch):
     """process_era_file sends the S3 path and returns posting summary."""
+    monkeypatch.setenv("ADAPTIX_SERVICE_TOKEN", "test-service-token-not-a-real-secret")
+    import importlib, temporal_app.activities.billing_activities as _m; importlib.reload(_m)
     from temporal_app.activities import billing_activities
 
     response_body = {
@@ -229,8 +233,10 @@ async def test_process_era_file_success():
 
 
 @pytest.mark.asyncio
-async def test_run_monthly_agency_invoicing_success():
+async def test_run_monthly_agency_invoicing_success(monkeypatch):
     """run_monthly_agency_invoicing sends the billing month and returns summary."""
+    monkeypatch.setenv("ADAPTIX_SERVICE_TOKEN", "test-service-token-not-a-real-secret")
+    import importlib, temporal_app.activities.billing_activities as _m; importlib.reload(_m)
     from temporal_app.activities import billing_activities
 
     response_body = {"invoices_processed": 47, "failed": 0}
