@@ -142,11 +142,11 @@ async def test_submit_claim_500_reraises_for_retry(monkeypatch):
 @pytest.mark.asyncio
 async def test_submit_claim_missing_token_raises_runtime_error(monkeypatch):
     """submit_claim_to_clearinghouse raises RuntimeError when service token is absent."""
+    import sys
+
     monkeypatch.setenv("ADAPTIX_SERVICE_TOKEN", "")
 
     # Reload config and activities to pick up the empty token.
-    import importlib
-    import sys
     for mod in list(sys.modules.keys()):
         if "temporal_app" in mod:
             del sys.modules[mod]
@@ -156,6 +156,13 @@ async def test_submit_claim_missing_token_raises_runtime_error(monkeypatch):
     with patch("temporalio.activity.heartbeat"):
         with pytest.raises(RuntimeError, match="ADAPTIX_SERVICE_TOKEN"):
             await billing_activities.submit_claim_to_clearinghouse("claim-abc")
+
+    # Restore the token so subsequent tests in this process are not affected
+    # by the module purge.
+    monkeypatch.setenv("ADAPTIX_SERVICE_TOKEN", "test-service-token-not-a-real-secret")
+    for mod in list(sys.modules.keys()):
+        if "temporal_app" in mod:
+            del sys.modules[mod]
 
 
 # ---------------------------------------------------------------------------
