@@ -1,4 +1,4 @@
-name: Build and Deploy Production
+﻿name: Build and Deploy Production
 
 # Production deploy pipeline for Adaptix-Temporal-Service.
 #
@@ -16,7 +16,7 @@ name: Build and Deploy Production
 #   3. Update all four ECS services concurrently (force-new-deployment).
 #   4. Wait for each service to reach steady state.
 #
-# No database migrations — temporal workers have no database of their own.
+# No database migrations â€” temporal workers have no database of their own.
 # All persistence is through Adaptix service APIs.
 
 on:
@@ -45,7 +45,7 @@ jobs:
       ECS_CLUSTER: adaptix-production
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -147,7 +147,7 @@ jobs:
             aws ecs wait services-stable \
               --cluster "${ECS_CLUSTER}" \
               --services "${SERVICE}" || \
-            echo "WARNING: ${SERVICE} stability waiter timed out. Deploy was committed — check ECS console."
+            echo "WARNING: ${SERVICE} stability waiter timed out. Deploy was committed â€” check ECS console."
           done
 
           echo "All Temporal worker services deployed."
