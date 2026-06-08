@@ -22,7 +22,6 @@ from datetime import timedelta
 from typing import Any
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from temporal_app.activities.billing_activities import (
