@@ -52,7 +52,7 @@ VALID_TASK_QUEUES: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 
 ADAPTIX_API_BASE: str = os.environ.get("ADAPTIX_API_BASE", "").rstrip("/")
-ADAPTIX_SERVICE_TOKEN: Optional[str] = os.environ.get("ADAPTIX_SERVICE_TOKEN") or None
+ADAPTIX_SERVICE_TOKEN: str | None = os.environ.get("ADAPTIX_SERVICE_TOKEN") or None
 
 # ---------------------------------------------------------------------------
 # AWS
