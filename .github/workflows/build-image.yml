@@ -35,7 +35,7 @@ concurrency:
 jobs:
   deploy:
     name: Build and deploy Temporal worker image
-    runs-on: ubuntu-latest
+    runs-on: codebuild-adaptix-ci-${{ github.run_id }}-${{ github.run_attempt }}
     timeout-minutes: 30
     environment: production
     env:
