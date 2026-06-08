@@ -306,13 +306,13 @@ async def send_statement_email(statement_id: str, to: str) -> dict[str, Any]:
 
 @activity.defn
 async def queue_statement_for_mail(statement_id: str) -> dict[str, Any]:
-    """Queue a patient statement for physical mail via PostGrid.
+    """Queue a patient statement for physical mail via DocuPost.
 
     Calls: POST /api/v1/billing/statements/{statement_id}/send-mail
 
-    The Billing Service generates a PostGrid letter request, submits it,
-    and persists the delivery tracking record. Returns the PostGrid letter
-    ID and estimated delivery window.
+    The Billing Service generates a DocuPost letter request, submits it,
+    and persists the delivery tracking record. Returns the DocuPost submission
+    id and estimated delivery window.
 
     Used by SendBatchStatementsWorkflow for patients with mail-only or
     mail+email delivery preference.
@@ -341,7 +341,7 @@ async def queue_statement_for_mail(statement_id: str) -> dict[str, Any]:
     result = resp.json()
     logger.info(
         "notification_activity.queue_statement_for_mail statement_id=%s "
-        "postgrid_letter_id=%s",
+        "submission_id=%s",
         statement_id,
         result.get("postgrid_letter_id"),
     )

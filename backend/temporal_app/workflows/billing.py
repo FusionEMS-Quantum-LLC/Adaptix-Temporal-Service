@@ -237,7 +237,7 @@ class MonthlyInvoicingWorkflow:
       1. Queries all active TenantSubscription rows.
       2. Creates billing cycle records for each.
       3. Charges each via Stripe.
-      4. Sends billing statements via SES and/or PostGrid.
+      4. Sends billing statements via SES and/or DocuPost.
       5. Persists billing audit events.
 
     The Billing Service endpoint is idempotent on billing_month — a second
