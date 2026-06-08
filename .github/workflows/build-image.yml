@@ -16,7 +16,7 @@
 #   3. Update all four ECS services concurrently (force-new-deployment).
 #   4. Wait for each service to reach steady state.
 #
-# No database migrations â€” temporal workers have no database of their own.
+# No database migrations â€" temporal workers have no database of their own.
 # All persistence is through Adaptix service APIs.
 
 on:
@@ -147,7 +147,7 @@ jobs:
             aws ecs wait services-stable \
               --cluster "${ECS_CLUSTER}" \
               --services "${SERVICE}" || \
-            echo "WARNING: ${SERVICE} stability waiter timed out. Deploy was committed â€” check ECS console."
+            echo "WARNING: ${SERVICE} stability waiter timed out. Deploy was committed â€" check ECS console."
           done
 
           echo "All Temporal worker services deployed."
