@@ -3,16 +3,16 @@
 Workflows orchestrate multi-step document lifecycle operations:
   - PDF generation
   - TrustSign envelope lifecycle (create → poll → finalize)
-  - DocuPost physical mail delivery
+  - PostGrid physical mail delivery
 
 TrustSign is Adaptix-native. No external e-signature provider is referenced
 anywhere in this module. Attempting to route signatures externally is a
 production integrity violation.
 
 Workflows registered here:
-  - GeneratePDFWorkflow       — generate and store a PDF document
-  - TrustSignWorkflow         — complete a document signing lifecycle
-  - DocuPostDeliveryWorkflow  — send a document via physical mail (DocuPost)
+  - GeneratePDFWorkflow     — generate and store a PDF document
+  - TrustSignWorkflow       — complete a document signing lifecycle
+  - PostGridDeliveryWorkflow — send a document via physical mail
 """
 
 from __future__ import annotations
@@ -194,24 +194,23 @@ class TrustSignWorkflow:
 
 
 @workflow.defn
-class DocuPostDeliveryWorkflow:
-    """Deliver a billing statement via DocuPost physical mail.
+class PostGridDeliveryWorkflow:
+    """Deliver a billing statement via PostGrid physical mail.
 
-    Workflow ID convention: "docupost-delivery-{statement_id}"
+    Workflow ID convention: "postgrid-delivery-{statement_id}"
     Task queue: documents
 
     Input:
         statement_id (str): Adaptix statement UUID.
 
     Result:
-        dict: DocuPost delivery record (postgrid_letter_id key retained for
-        backwards compatibility — value is now the DocuPost submission id).
+        dict: PostGrid delivery record (postgrid_letter_id, estimated_delivery).
     """
 
     @workflow.run
     async def run(self, statement_id: str) -> dict[str, Any]:
         workflow.logger.info(
-            "DocuPostDeliveryWorkflow starting statement_id=%s", statement_id
+            "PostGridDeliveryWorkflow starting statement_id=%s", statement_id
         )
 
         result: dict[str, Any] = await workflow.execute_activity(
@@ -222,13 +221,9 @@ class DocuPostDeliveryWorkflow:
         )
 
         workflow.logger.info(
-            "DocuPostDeliveryWorkflow complete statement_id=%s "
-            "submission_id=%s",
+            "PostGridDeliveryWorkflow complete statement_id=%s "
+            "postgrid_letter_id=%s",
             statement_id,
             result.get("postgrid_letter_id"),
         )
         return result
-
-
-# Alias so any code still referencing PostGridDeliveryWorkflow continues to work.
-PostGridDeliveryWorkflow = DocuPostDeliveryWorkflow

@@ -3,7 +3,7 @@
 Workflows:
   GeneratePDFWorkflow   — generates a PDF document via the Documents Service.
   TrustSignWorkflow     — manages the full TrustSign signing lifecycle.
-  DocuPostMailWorkflow  — submits a patient statement for physical mail.
+  PostGridMailWorkflow  — submits a patient statement for physical mail.
 
 TrustSign is Adaptix-native. No external e-signature provider is called,
 referenced, or fallback-enabled. Any change to this workflow that introduces
@@ -194,27 +194,27 @@ class TrustSignWorkflow:
 
 
 @workflow.defn
-class DocuPostMailWorkflow:
-    """Submit a patient statement for physical mail delivery via DocuPost.
+class PostGridMailWorkflow:
+    """Submit a patient statement for physical mail delivery via PostGrid.
 
     Input:  statement_id (str) — Adaptix statement UUID
-    Output: dict — DocuPost delivery record.
+    Output: dict — PostGrid delivery record.
 
-    The Billing Service handles DocuPost API interaction, letter generation
+    The Billing Service handles PostGrid API interaction, letter generation
     from the statement PDF, and persistence of the delivery tracking record.
     This workflow is a thin orchestrator that ensures the activity is called
     with the correct retry policy.
 
     Idempotency: The Billing Service is responsible for deduplication at
-    the DocuPost level. Re-running this workflow with the same statement_id
-    is safe — the Billing Service checks for an existing submission record
-    before submitting a new request.
+    the PostGrid level. Re-running this workflow with the same statement_id
+    is safe — the Billing Service checks for an existing PostGrid letter
+    record before submitting a new request.
     """
 
     @workflow.run
     async def run(self, statement_id: str) -> dict:
         workflow.logger.info(
-            "DocuPostMailWorkflow started statement_id=%s", statement_id
+            "PostGridMailWorkflow started statement_id=%s", statement_id
         )
 
         result = await workflow.execute_activity(
@@ -225,14 +225,9 @@ class DocuPostMailWorkflow:
         )
 
         workflow.logger.info(
-            "DocuPostMailWorkflow completed statement_id=%s "
-            "submission_id=%s",
+            "PostGridMailWorkflow completed statement_id=%s "
+            "postgrid_letter_id=%s",
             statement_id,
             result.get("postgrid_letter_id"),
         )
         return result
-
-
-# Alias for backwards compatibility — any code still referencing PostGridMailWorkflow
-# by name continues to work. New code should use DocuPostMailWorkflow.
-PostGridMailWorkflow = DocuPostMailWorkflow

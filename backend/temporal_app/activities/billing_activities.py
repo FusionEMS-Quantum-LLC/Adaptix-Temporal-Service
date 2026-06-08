@@ -297,7 +297,7 @@ async def run_monthly_agency_invoicing(billing_month: str) -> dict[str, Any]:
 
     billing_month: ISO month string (e.g. "2026-06"). The Billing Service
         will invoice all active subscriptions for that calendar month via
-        Stripe, send statements via SES/DocuPost, and persist billing cycle
+        Stripe, send statements via SES/PostGrid, and persist billing cycle
         records.
 
     This is a long-running activity — heartbeats are emitted during the call.

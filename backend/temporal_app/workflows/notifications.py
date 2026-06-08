@@ -144,8 +144,8 @@ class SendBatchStatementsWorkflow:
       1. Fetch the full recipient list from the Billing Service.
       2. For each recipient, dispatch statement(s) based on delivery preference:
          - email: send via SES
-         - mail:  queue via DocuPost
-         - both:  send via SES AND queue via DocuPost
+         - mail:  queue via PostGrid
+         - both:  send via SES AND queue via PostGrid
       3. Collect results; failures are recorded but do not abort the batch.
 
     Failure handling:
@@ -158,7 +158,7 @@ class SendBatchStatementsWorkflow:
       Re-running this workflow for the same agency_id + month will re-attempt
       delivery for all recipients. The Billing Service statement endpoint is
       idempotent on statement_id so re-running does not generate duplicate
-      DocuPost letters (DocuPost deduplication is enforced by the Billing
+      PostGrid letters (PostGrid deduplication is enforced by the Billing
       Service, not here).
     """
 

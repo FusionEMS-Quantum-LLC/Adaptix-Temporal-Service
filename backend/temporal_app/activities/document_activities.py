@@ -3,7 +3,7 @@
 Activities call:
   - Adaptix Documents Service for PDF generation
   - Adaptix Core Service for TrustSign document lifecycle
-  - Adaptix Billing Service for DocuPost mail delivery
+  - Adaptix Billing Service for PostGrid mail delivery
 
 PHI-safe: document content is never logged. Only document_id, document_type,
 output_key (S3 path), and operation status are emitted.
@@ -275,35 +275,29 @@ async def finalize_trustsign_envelope(envelope_id: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# DocuPost mail activity
+# PostGrid mail activity
 # ---------------------------------------------------------------------------
 
 
-@activity.defn(name="send_statement_via_postgrid")
-async def send_statement_via_docupost(statement_id: str) -> dict[str, Any]:
-    """Submit a patient statement to DocuPost for physical mail delivery.
-
-    Registered under the legacy Temporal activity name
-    ``send_statement_via_postgrid`` to preserve compatibility with any
-    in-flight workflows scheduled before the 2026-06-06 hard cutover.
+@activity.defn
+async def send_statement_via_postgrid(statement_id: str) -> dict[str, Any]:
+    """Submit a patient statement to PostGrid for physical mail delivery.
 
     Calls: POST /api/v1/billing/statements/{statement_id}/send-mail
 
     The Billing Service:
       1. Resolves the statement PDF from S3.
-      2. Submits a letter job to the DocuPost API.
-      3. Persists the DocuPost submission id and estimated delivery date.
+      2. Submits a letter job to the PostGrid API.
+      3. Persists the PostGrid letter ID and estimated delivery date.
       4. Writes a billing audit event.
 
     Returns:
       {"postgrid_letter_id": "...", "estimated_delivery": "...",
        "status": "queued"}
-      (``postgrid_letter_id`` key retained for backwards compatibility;
-       the value is now the DocuPost submission id.)
     """
-    activity.heartbeat("sending_via_docupost")
+    activity.heartbeat("sending_via_postgrid")
     logger.info(
-        "document_activity.send_via_docupost statement_id=%s",
+        "document_activity.send_via_postgrid statement_id=%s",
         statement_id,
     )
 
@@ -316,7 +310,7 @@ async def send_statement_via_docupost(statement_id: str) -> dict[str, Any]:
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
             logger.error(
-                "document_activity.send_via_docupost statement_id=%s status=%s",
+                "document_activity.send_via_postgrid statement_id=%s status=%s",
                 statement_id,
                 exc.response.status_code,
             )
@@ -324,14 +318,9 @@ async def send_statement_via_docupost(statement_id: str) -> dict[str, Any]:
 
     result = resp.json()
     logger.info(
-        "document_activity.send_via_docupost statement_id=%s "
-        "submission_id=%s",
+        "document_activity.send_via_postgrid statement_id=%s "
+        "postgrid_letter_id=%s",
         statement_id,
         result.get("postgrid_letter_id"),
     )
     return result
-
-
-# Alias so existing imports of send_statement_via_postgrid continue to work
-# without requiring simultaneous changes to all workflow files.
-send_statement_via_postgrid = send_statement_via_docupost
