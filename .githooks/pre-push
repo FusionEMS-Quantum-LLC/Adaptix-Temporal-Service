@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# AdaptixCore canonical pre-push hook. Calls scripts/local-ci.sh which is
+# vendored from Adaptix-Governance. To skip a check, see ADAPTIX_CI_SKIP in
+# scripts/local-ci.sh. To bypass the hook entirely (NOT recommended), use:
+#   git push --no-verify
+set -e
+if [[ -x ./scripts/local-ci.sh ]]; then
+  exec ./scripts/local-ci.sh python
+else
+  echo "scripts/local-ci.sh missing or not executable — push BLOCKED" >&2
+  echo "re-install via: bash <(curl -fsSL https://raw.githubusercontent.com/FusionEMS-Quantum-LLC/Adaptix-Governance/main/scripts/install-hook.sh)" >&2
+  exit 1
+fi
