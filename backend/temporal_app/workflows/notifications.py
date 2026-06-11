@@ -67,9 +67,7 @@ class SendEmailWorkflow:
         template: str,
         context: dict[str, Any],
     ) -> dict:
-        workflow.logger.info(
-            "SendEmailWorkflow started template=%s", template
-        )
+        workflow.logger.info("SendEmailWorkflow started template=%s", template)
 
         result = await workflow.execute_activity(
             send_email_notification,

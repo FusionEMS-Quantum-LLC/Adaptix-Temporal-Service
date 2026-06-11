@@ -183,9 +183,7 @@ class AgencyOnboardingWorkflow:
 
     @workflow.run
     async def run(self, tenant_id: str) -> dict:
-        workflow.logger.info(
-            "AgencyOnboardingWorkflow started tenant_id=%s", tenant_id
-        )
+        workflow.logger.info("AgencyOnboardingWorkflow started tenant_id=%s", tenant_id)
 
         # Step 1: Confirm tenant provisioning.
         await workflow.execute_activity(
@@ -261,8 +259,8 @@ class AgencyOnboardingWorkflow:
             )
 
         # Step 5: Run workspace activation as a child workflow.
-        activation_result = await workflow.execute_child_workflow(
-            WorkspaceActivationWorkflow,
+        activation_result: dict = await workflow.execute_child_workflow(
+            WorkspaceActivationWorkflow,  # type: ignore[arg-type]
             args=[tenant_id, admin_email],
             id=f"workspace-activation-{tenant_id}",
             execution_timeout=timedelta(hours=1),

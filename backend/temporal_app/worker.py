@@ -111,7 +111,7 @@ def _configure_logging() -> None:
     logging.basicConfig(
         level=log_level,
         format='{"timestamp": "%(asctime)s", "level": "%(levelname)s", '
-               '"logger": "%(name)s", "message": "%(message)s"}',
+        '"logger": "%(name)s", "message": "%(message)s"}',
         datefmt="%Y-%m-%dT%H:%M:%S",
         stream=sys.stdout,
     )

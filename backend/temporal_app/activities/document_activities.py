@@ -318,8 +318,7 @@ async def send_statement_via_postgrid(statement_id: str) -> dict[str, Any]:
 
     result = resp.json()
     logger.info(
-        "document_activity.send_via_postgrid statement_id=%s "
-        "postgrid_letter_id=%s",
+        "document_activity.send_via_postgrid statement_id=%s postgrid_letter_id=%s",
         statement_id,
         result.get("postgrid_letter_id"),
     )
