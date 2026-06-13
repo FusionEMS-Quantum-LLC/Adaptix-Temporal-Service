@@ -1,0 +1,53 @@
+# pr-validation — canonical Python-service gate for Adaptix-Temporal-Service.
+#
+# Fires on: PULL_REQUEST_CREATED | PULL_REQUEST_UPDATED | PULL_REQUEST_REOPENED
+# Owns:     lint + format + typecheck + fast unit tests
+
+version: 0.2
+
+env:
+  shell: bash
+  variables:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    PYTHONDONTWRITEBYTECODE: "1"
+    PYTHONUNBUFFERED: "1"
+    ADAPTIX_CI_SKIP: "secrets,deps,install"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - python --version
+      - pip install --quiet --upgrade pip
+      - pip install --quiet ruff mypy pytest pytest-asyncio pytest-cov aiosqlite httpx
+      - |
+        for BD in core/backend backend .; do
+          if [ -f "$BD/pyproject.toml" ]; then
+            pip install --quiet -e "$BD"
+            pip install --quiet -e "$BD[test]" 2>/dev/null || true
+            pip install --quiet -e "$BD[dev]"  2>/dev/null || true
+            break
+          fi
+        done
+      - |
+        for f in $(find . -maxdepth 3 -name "requirements*.txt" -not -path "*/node_modules/*" -not -path "*/.git/*"); do
+          pip install --quiet -r "$f" || true
+        done
+
+  pre_build:
+    commands:
+      - echo "=== Repo state ==="
+      - git rev-parse HEAD
+      - git status --short
+
+  build:
+    commands:
+      - chmod +x scripts/local-ci.sh
+      - bash scripts/local-ci.sh python
+
+cache:
+  paths:
+    - "/root/.cache/pip/**/*"
+    - ".mypy_cache/**/*"
+    - ".ruff_cache/**/*"

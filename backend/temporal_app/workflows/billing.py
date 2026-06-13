@@ -73,9 +73,7 @@ class ClaimSubmissionWorkflow:
 
     @workflow.run
     async def run(self, claim_id: str) -> dict:
-        workflow.logger.info(
-            "ClaimSubmissionWorkflow started claim_id=%s", claim_id
-        )
+        workflow.logger.info("ClaimSubmissionWorkflow started claim_id=%s", claim_id)
 
         result = await workflow.execute_activity(
             submit_claim_to_clearinghouse,
@@ -84,9 +82,7 @@ class ClaimSubmissionWorkflow:
             retry_policy=EXTERNAL_VENDOR_RETRY_POLICY,
         )
 
-        workflow.logger.info(
-            "ClaimSubmissionWorkflow completed claim_id=%s", claim_id
-        )
+        workflow.logger.info("ClaimSubmissionWorkflow completed claim_id=%s", claim_id)
         return result
 
 
@@ -152,8 +148,7 @@ class DenialResubmissionWorkflow:
         )
 
         workflow.logger.info(
-            "DenialResubmissionWorkflow appeal_created claim_id=%s "
-            "appeal_id=%s",
+            "DenialResubmissionWorkflow appeal_created claim_id=%s appeal_id=%s",
             claim_id,
             appeal_result.get("appeal_id"),
         )
@@ -272,8 +267,7 @@ class MonthlyInvoicingWorkflow:
         )
 
         workflow.logger.info(
-            "MonthlyInvoicingWorkflow completed billing_month=%s "
-            "invoices_processed=%s",
+            "MonthlyInvoicingWorkflow completed billing_month=%s invoices_processed=%s",
             billing_month,
             result.get("invoices_processed"),
         )

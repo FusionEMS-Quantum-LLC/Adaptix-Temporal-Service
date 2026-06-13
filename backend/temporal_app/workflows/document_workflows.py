@@ -221,8 +221,7 @@ class PostGridDeliveryWorkflow:
         )
 
         workflow.logger.info(
-            "PostGridDeliveryWorkflow complete statement_id=%s "
-            "postgrid_letter_id=%s",
+            "PostGridDeliveryWorkflow complete statement_id=%s postgrid_letter_id=%s",
             statement_id,
             result.get("postgrid_letter_id"),
         )

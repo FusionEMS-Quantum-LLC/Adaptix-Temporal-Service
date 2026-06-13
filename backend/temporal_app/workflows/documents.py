@@ -114,9 +114,7 @@ class TrustSignWorkflow:
 
     @workflow.run
     async def run(self, document_id: str, recipient_email: str) -> dict:
-        workflow.logger.info(
-            "TrustSignWorkflow started document_id=%s", document_id
-        )
+        workflow.logger.info("TrustSignWorkflow started document_id=%s", document_id)
 
         # Step 1: Create envelope and send invitation.
         envelope = await workflow.execute_activity(
@@ -225,8 +223,7 @@ class PostGridMailWorkflow:
         )
 
         workflow.logger.info(
-            "PostGridMailWorkflow completed statement_id=%s "
-            "postgrid_letter_id=%s",
+            "PostGridMailWorkflow completed statement_id=%s postgrid_letter_id=%s",
             statement_id,
             result.get("postgrid_letter_id"),
         )

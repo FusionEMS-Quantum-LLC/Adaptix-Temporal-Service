@@ -328,8 +328,7 @@ async def run_monthly_agency_invoicing(billing_month: str) -> dict[str, Any]:
 
     result = resp.json()
     logger.info(
-        "billing_activity.run_monthly_agency_invoicing month=%s "
-        "invoices_processed=%s",
+        "billing_activity.run_monthly_agency_invoicing month=%s invoices_processed=%s",
         billing_month,
         result.get("invoices_processed", "unknown"),
     )

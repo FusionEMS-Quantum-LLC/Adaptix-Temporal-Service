@@ -61,9 +61,7 @@ class ClaimSubmissionWorkflow:
 
     @workflow.run
     async def run(self, claim_id: str) -> dict[str, Any]:
-        workflow.logger.info(
-            "ClaimSubmissionWorkflow starting claim_id=%s", claim_id
-        )
+        workflow.logger.info("ClaimSubmissionWorkflow starting claim_id=%s", claim_id)
 
         result: dict[str, Any] = await workflow.execute_activity(
             submit_claim_to_clearinghouse,

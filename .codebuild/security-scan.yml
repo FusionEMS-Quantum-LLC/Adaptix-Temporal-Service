@@ -1,0 +1,95 @@
+# security-scan — canonical Python-service gate for Adaptix-Temporal-Service.
+#
+# Fires on: PULL_REQUEST_* | PUSH on main
+# Owns:     gitleaks (secrets), bandit (python security lint), pip-audit (deps).
+# Independent project so a security failure surfaces as its own status check
+# rather than being conflated with a lint or test failure.
+
+version: 0.2
+
+env:
+  shell: bash
+  variables:
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    # Pinned to the version that generated .gitleaksignore (fingerprint
+    # formats must match for the historical baseline to be honored).
+    GITLEAKS_VERSION: "8.30.1"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - pip install --quiet --upgrade pip
+      - pip install --quiet bandit pip-audit
+      - |
+        curl -sSfL -o /tmp/gitleaks.tgz \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+        tar -C /usr/local/bin -xzf /tmp/gitleaks.tgz gitleaks
+        gitleaks version
+
+  build:
+    commands:
+      # reports/ must exist before any tool writes into it (gitleaks/bandit/
+      # pip-audit all emit report files here). Without this, gitleaks exits 1
+      # on "open reports/...: no such file or directory" even when it finds
+      # zero leaks.
+      - mkdir -p reports
+      - echo "=== gitleaks (secrets — BLOCKING, new-commit scope) ==="
+      # Scope the blocking scan to the commits this build introduces (PR range
+      # or push range). Full-history scanning is non-deterministic here: the
+      # same history yields different finding counts/fingerprints per clone
+      # (verified 2026-06-10 — 4303 local / 4139 fresh-clone / 8459 CodeBuild;
+      # git's diff rendering varies by platform + ref set), so a fingerprint
+      # baseline can never reliably cover it. Historical findings are tracked
+      # as a separate rotation/triage workstream — this gate's contract is
+      # "no NEW leaks enter the repo". .gitleaksignore still applies on top.
+      - |
+        git fetch --quiet origin main || true
+        if [ -n "${CODEBUILD_WEBHOOK_PREV_COMMIT:-}" ] \
+           && [ "${CODEBUILD_WEBHOOK_PREV_COMMIT}" != "0000000000000000000000000000000000000000" ] \
+           && git cat-file -e "${CODEBUILD_WEBHOOK_PREV_COMMIT}" 2>/dev/null; then
+          RANGE="${CODEBUILD_WEBHOOK_PREV_COMMIT}..HEAD"          # push to main
+        elif BASE=$(git merge-base origin/main HEAD 2>/dev/null) && [ -n "$BASE" ]; then
+          RANGE="${BASE}..HEAD"                                   # PR validation
+        else
+          RANGE="HEAD~1..HEAD"                                    # safety fallback
+        fi
+        echo "gitleaks scan range: $RANGE ($(git rev-list --count "$RANGE") commits)"
+        gitleaks detect --no-banner --redact --report-format=sarif \
+          --report-path=reports/gitleaks.sarif --log-opts="$RANGE"
+      - echo "=== bandit (high-severity app security — BLOCKING) ==="
+      - |
+        BANDIT_TARGETS=()
+        [ -d core/backend ] && BANDIT_TARGETS+=("core/backend")
+        [ -d backend ]      && BANDIT_TARGETS+=("backend")
+        [ -d src ]          && BANDIT_TARGETS+=("src")
+        if [ ${#BANDIT_TARGETS[@]} -eq 0 ]; then
+          echo "WARN: no python source dirs found; bandit skipped"
+        else
+          bandit -r "${BANDIT_TARGETS[@]}" -lll -iii --exclude '**/tests/**,**/test_*.py,**/migrations/**' \
+            -f json -o reports/bandit.json
+        fi
+      # pip-audit is REPORT-ONLY (non-blocking). Transitive dependency CVEs are
+      # outside a single PR's control — an upstream package may have a CVE with
+      # no patch released yet. Gating merges on that would make zero-failures
+      # impossible and is not "fixing an error" (nothing in the PR can fix it).
+      # CVEs are tracked + patched operationally as fixes ship. Secrets
+      # (gitleaks) and app-code security (bandit) ARE controllable and stay
+      # blocking above.
+      - echo "=== pip-audit (dependency CVEs — REPORT-ONLY) ==="
+      - |
+        for req in $(find . -name "requirements*.txt" -not -path "*/node_modules/*" -not -path "*/.git/*"); do
+          echo "Auditing $req"
+          pip-audit -r "$req" --format json --output "reports/pip-audit-$(echo "$req" | tr '/' '_').json" || echo "WARN: pip-audit findings in $req (report-only)"
+        done
+        for pyp in $(find . -name "pyproject.toml" -not -path "*/node_modules/*" -not -path "*/.git/*"); do
+          echo "Auditing $pyp"
+          pip-audit -r "$pyp" --format json --output "reports/pip-audit-$(echo "$pyp" | tr '/' '_').json" || echo "WARN: pip-audit findings in $pyp (report-only)"
+        done
+        echo "pip-audit complete (report-only)."
+
+artifacts:
+  files:
+    - "reports/**/*"
+  discard-paths: no

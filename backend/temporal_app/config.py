@@ -74,9 +74,7 @@ WORKER_MAX_CONCURRENT_ACTIVITY_TASKS: int = int(
 # HTTP client settings
 # ---------------------------------------------------------------------------
 
-ACTIVITY_HTTP_TIMEOUT_S: float = float(
-    os.environ.get("ACTIVITY_HTTP_TIMEOUT_S", "30")
-)
+ACTIVITY_HTTP_TIMEOUT_S: float = float(os.environ.get("ACTIVITY_HTTP_TIMEOUT_S", "30"))
 
 # ---------------------------------------------------------------------------
 # Retry policy — applied to all Adaptix workflow activities unless overridden.
@@ -125,7 +123,9 @@ def validate_config() -> list[str]:
         errors.append("TEMPORAL_HOST is required (e.g. temporal.internal:7233)")
 
     if not TASK_QUEUE:
-        errors.append("TASK_QUEUE is required (billing|notifications|documents|onboarding)")
+        errors.append(
+            "TASK_QUEUE is required (billing|notifications|documents|onboarding)"
+        )
     elif TASK_QUEUE not in VALID_TASK_QUEUES:
         errors.append(
             f"TASK_QUEUE '{TASK_QUEUE}' is not recognised. "
@@ -133,10 +133,7 @@ def validate_config() -> list[str]:
         )
 
     if not ADAPTIX_API_BASE:
-        errors.append(
-            "ADAPTIX_API_BASE is required "
-            "(e.g. https://api.adaptixcore.com)"
-        )
+        errors.append("ADAPTIX_API_BASE is required (e.g. https://api.adaptixcore.com)")
 
     if not ADAPTIX_SERVICE_TOKEN:
         errors.append(

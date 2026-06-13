@@ -134,9 +134,7 @@ async def advance_onboarding_step(
     async with httpx.AsyncClient(timeout=ACTIVITY_HTTP_TIMEOUT_S) as client:
         try:
             resp = await client.post(
-                _api_url(
-                    f"/api/v1/go-live/cases/{case_id}/steps/{step_key}/advance"
-                ),
+                _api_url(f"/api/v1/go-live/cases/{case_id}/steps/{step_key}/advance"),
                 headers=_auth_header(),
             )
             resp.raise_for_status()
@@ -180,9 +178,7 @@ async def complete_onboarding_step(
     async with httpx.AsyncClient(timeout=ACTIVITY_HTTP_TIMEOUT_S) as client:
         try:
             resp = await client.post(
-                _api_url(
-                    f"/api/v1/go-live/cases/{case_id}/steps/{step_key}/complete"
-                ),
+                _api_url(f"/api/v1/go-live/cases/{case_id}/steps/{step_key}/complete"),
                 headers=_auth_header(),
             )
             resp.raise_for_status()
@@ -252,9 +248,7 @@ async def run_go_live_readiness_check(tenant_id: str) -> dict[str, Any]:
     ready for workspace activation.
     """
     activity.heartbeat("running_go_live_check")
-    logger.info(
-        "onboarding_activity.go_live_readiness_check tenant_id=%s", tenant_id
-    )
+    logger.info("onboarding_activity.go_live_readiness_check tenant_id=%s", tenant_id)
 
     async with httpx.AsyncClient(timeout=ACTIVITY_HTTP_TIMEOUT_S) as client:
         try:
