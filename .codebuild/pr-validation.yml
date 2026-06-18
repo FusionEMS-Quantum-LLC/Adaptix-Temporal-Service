@@ -11,7 +11,7 @@ env:
     PIP_DISABLE_PIP_VERSION_CHECK: "1"
     PYTHONDONTWRITEBYTECODE: "1"
     PYTHONUNBUFFERED: "1"
-    ADAPTIX_CI_SKIP: "secrets,deps,install"
+    ADAPTIX_CI_SKIP: "secrets,deps,install,test"
 
 phases:
   install:
@@ -20,7 +20,7 @@ phases:
     commands:
       - python --version
       - pip install --quiet --upgrade pip
-      - pip install --quiet ruff mypy pytest pytest-asyncio pytest-cov aiosqlite httpx
+      - pip install --quiet ruff mypy pytest pytest-asyncio pytest-cov pytest-xdist aiosqlite httpx
       - |
         for BD in core/backend backend .; do
           if [ -f "$BD/pyproject.toml" ]; then
@@ -45,6 +45,11 @@ phases:
     commands:
       - chmod +x scripts/local-ci.sh
       - bash scripts/local-ci.sh python
+      - |
+        # Parallelise the full suite (-n auto) so it fits the CodeBuild timeout
+        # on SMALL compute (serial run BUILD_TIMED_OUT). Backend dir autodetected.
+        BD=$(for d in backend core/backend src .; do [ -d "$d/tests" ] && { echo "$d"; break; }; done)
+        cd "${BD:-backend}" && python -m pytest -q --no-header --tb=line -n auto
 
 cache:
   paths:
