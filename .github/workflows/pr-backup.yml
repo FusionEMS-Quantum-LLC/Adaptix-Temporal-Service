@@ -1,0 +1,30 @@
+name: PR Backup
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+permissions:
+  contents: read
+  pull-requests: read
+concurrency:
+  group: pr-backup-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+jobs:
+  backup-pr:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Capture PR patch + metadata (no untrusted value touches the shell)
+        run: |
+          mkdir -p pr-backup
+          gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json number,title,state,author,headRefName,headRefOid,baseRefName,baseRefOid,mergeable,isDraft,merged,labels,commits,files \
+            > "pr-backup/pr-$PR_NUMBER.json"
+          gh pr diff "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --patch > "pr-backup/pr-$PR_NUMBER.patch" || true
+      - name: Upload backup artifact (90d)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-${{ github.event.pull_request.number }}-backup
+          path: pr-backup/
+          retention-days: 90
