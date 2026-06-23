@@ -60,7 +60,9 @@ async def test_send_sms_billing_statement_reminder_allowed():
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    with patch("temporal_app.activities.notification_activities.httpx.AsyncClient") as mock_cls:
+    with patch(
+        "temporal_app.activities.notification_activities.httpx.AsyncClient"
+    ) as mock_cls:
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):
@@ -92,7 +94,9 @@ async def test_all_allowed_sms_categories_pass_validation(category):
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    with patch("temporal_app.activities.notification_activities.httpx.AsyncClient") as mock_cls:
+    with patch(
+        "temporal_app.activities.notification_activities.httpx.AsyncClient"
+    ) as mock_cls:
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):
@@ -120,7 +124,9 @@ async def test_send_email_success():
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    with patch("temporal_app.activities.notification_activities.httpx.AsyncClient") as mock_cls:
+    with patch(
+        "temporal_app.activities.notification_activities.httpx.AsyncClient"
+    ) as mock_cls:
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):
@@ -151,7 +157,9 @@ async def test_send_email_422_raises_value_error():
         )
     )
 
-    with patch("temporal_app.activities.notification_activities.httpx.AsyncClient") as mock_cls:
+    with patch(
+        "temporal_app.activities.notification_activities.httpx.AsyncClient"
+    ) as mock_cls:
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):
@@ -175,7 +183,11 @@ async def test_list_recipients_returns_list():
     from temporal_app.activities import notification_activities
 
     recipients = [
-        {"statement_id": "stmt-001", "delivery_method": "email", "email": "patient@example.com"},
+        {
+            "statement_id": "stmt-001",
+            "delivery_method": "email",
+            "email": "patient@example.com",
+        },
         {"statement_id": "stmt-002", "delivery_method": "mail"},
     ]
     response_body = {"recipients": recipients}
@@ -183,7 +195,9 @@ async def test_list_recipients_returns_list():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_response)
 
-    with patch("temporal_app.activities.notification_activities.httpx.AsyncClient") as mock_cls:
+    with patch(
+        "temporal_app.activities.notification_activities.httpx.AsyncClient"
+    ) as mock_cls:
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):
@@ -205,7 +219,9 @@ async def test_list_recipients_empty_on_no_recipients():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_response)
 
-    with patch("temporal_app.activities.notification_activities.httpx.AsyncClient") as mock_cls:
+    with patch(
+        "temporal_app.activities.notification_activities.httpx.AsyncClient"
+    ) as mock_cls:
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):
