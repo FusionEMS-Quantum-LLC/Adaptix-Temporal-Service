@@ -91,7 +91,17 @@ def test_worker_entrypoints_import():
         if "temporal_app" in mod_name or "workers" in mod_name:
             del sys.modules[mod_name]
 
-    from workers import billing_worker, documents_worker, notifications_worker, onboarding_worker
+    from workers import (
+        billing_worker,
+        documents_worker,
+        notifications_worker,
+        onboarding_worker,
+    )
 
-    for w in [billing_worker, documents_worker, notifications_worker, onboarding_worker]:
+    for w in [
+        billing_worker,
+        documents_worker,
+        notifications_worker,
+        onboarding_worker,
+    ]:
         assert hasattr(w, "main"), f"{w.__name__} must have main()"

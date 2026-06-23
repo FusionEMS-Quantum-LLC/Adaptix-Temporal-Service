@@ -116,7 +116,9 @@ def test_postgrid_delivery_workflow_is_defined():
 
 def test_send_batch_statements_workflow_is_defined():
     """SendBatchStatementsWorkflow has a run(agency_id, month) signature."""
-    from temporal_app.workflows.notification_workflows import SendBatchStatementsWorkflow
+    from temporal_app.workflows.notification_workflows import (
+        SendBatchStatementsWorkflow,
+    )
 
     sig = inspect.signature(SendBatchStatementsWorkflow.run)
     params = list(sig.parameters.keys())
@@ -166,7 +168,9 @@ def test_build_worker_billing_queue_returns_worker(monkeypatch):
     mock_client = MagicMock()
     mock_worker = MagicMock()
 
-    with patch("temporal_app.worker.Worker", return_value=mock_worker) as mock_worker_cls:
+    with patch(
+        "temporal_app.worker.Worker", return_value=mock_worker
+    ) as mock_worker_cls:
         from temporal_app.worker import _build_worker
 
         result = _build_worker(mock_client, "billing")

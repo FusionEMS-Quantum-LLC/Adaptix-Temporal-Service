@@ -36,6 +36,7 @@ def _reload_config(monkeypatch, overrides: dict) -> object:
             del sys.modules[mod_name]
 
     import temporal_app.config as cfg
+
     return cfg
 
 

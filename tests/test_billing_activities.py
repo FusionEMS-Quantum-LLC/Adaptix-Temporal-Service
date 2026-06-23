@@ -33,9 +33,7 @@ import pytest_asyncio
 
 def _make_response(status_code: int, json_body: dict | None = None) -> httpx.Response:
     """Build a mock httpx.Response."""
-    content = (
-        __import__("json").dumps(json_body or {}).encode()
-    )
+    content = __import__("json").dumps(json_body or {}).encode()
     return httpx.Response(
         status_code=status_code,
         headers={"content-type": "application/json"},
@@ -60,9 +58,7 @@ async def test_submit_claim_success(monkeypatch):
     with patch.object(
         billing_activities.httpx.AsyncClient,
         "__aenter__",
-        return_value=AsyncMock(
-            post=AsyncMock(return_value=mock_response)
-        ),
+        return_value=AsyncMock(post=AsyncMock(return_value=mock_response)),
     ):
         # Wrap with activity.defn context mock.
         with patch("temporalio.activity.heartbeat"):
@@ -86,7 +82,9 @@ async def test_submit_claim_400_raises_value_error(monkeypatch):
         )
     )
 
-    with patch("temporal_app.activities.billing_activities.httpx.AsyncClient") as mock_cls:
+    with patch(
+        "temporal_app.activities.billing_activities.httpx.AsyncClient"
+    ) as mock_cls:
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):
@@ -109,7 +107,9 @@ async def test_submit_claim_403_raises_permission_error(monkeypatch):
         )
     )
 
-    with patch("temporal_app.activities.billing_activities.httpx.AsyncClient") as mock_cls:
+    with patch(
+        "temporal_app.activities.billing_activities.httpx.AsyncClient"
+    ) as mock_cls:
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):
@@ -131,7 +131,9 @@ async def test_submit_claim_500_reraises_for_retry(monkeypatch):
     )
     mock_client.post = AsyncMock(side_effect=original_exc)
 
-    with patch("temporal_app.activities.billing_activities.httpx.AsyncClient") as mock_cls:
+    with patch(
+        "temporal_app.activities.billing_activities.httpx.AsyncClient"
+    ) as mock_cls:
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):
@@ -174,7 +176,9 @@ async def test_submit_claim_missing_token_raises_runtime_error(monkeypatch):
 async def test_create_denial_appeal_success(monkeypatch):
     """create_denial_appeal posts the correct payload and returns JSON."""
     monkeypatch.setenv("ADAPTIX_SERVICE_TOKEN", "test-service-token-not-a-real-secret")
-    import importlib, temporal_app.activities.billing_activities as _m; importlib.reload(_m)
+    import importlib, temporal_app.activities.billing_activities as _m
+
+    importlib.reload(_m)
     from temporal_app.activities import billing_activities
 
     response_body = {"appeal_id": "appeal-456", "status": "pending_resubmit"}
@@ -182,7 +186,9 @@ async def test_create_denial_appeal_success(monkeypatch):
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    with patch("temporal_app.activities.billing_activities.httpx.AsyncClient") as mock_cls:
+    with patch(
+        "temporal_app.activities.billing_activities.httpx.AsyncClient"
+    ) as mock_cls:
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):
@@ -203,7 +209,9 @@ async def test_create_denial_appeal_success(monkeypatch):
 async def test_process_era_file_success(monkeypatch):
     """process_era_file sends the S3 path and returns posting summary."""
     monkeypatch.setenv("ADAPTIX_SERVICE_TOKEN", "test-service-token-not-a-real-secret")
-    import importlib, temporal_app.activities.billing_activities as _m; importlib.reload(_m)
+    import importlib, temporal_app.activities.billing_activities as _m
+
+    importlib.reload(_m)
     from temporal_app.activities import billing_activities
 
     response_body = {
@@ -215,7 +223,9 @@ async def test_process_era_file_success(monkeypatch):
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    with patch("temporal_app.activities.billing_activities.httpx.AsyncClient") as mock_cls:
+    with patch(
+        "temporal_app.activities.billing_activities.httpx.AsyncClient"
+    ) as mock_cls:
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):
@@ -236,7 +246,9 @@ async def test_process_era_file_success(monkeypatch):
 async def test_run_monthly_agency_invoicing_success(monkeypatch):
     """run_monthly_agency_invoicing sends the billing month and returns summary."""
     monkeypatch.setenv("ADAPTIX_SERVICE_TOKEN", "test-service-token-not-a-real-secret")
-    import importlib, temporal_app.activities.billing_activities as _m; importlib.reload(_m)
+    import importlib, temporal_app.activities.billing_activities as _m
+
+    importlib.reload(_m)
     from temporal_app.activities import billing_activities
 
     response_body = {"invoices_processed": 47, "failed": 0}
@@ -244,7 +256,9 @@ async def test_run_monthly_agency_invoicing_success(monkeypatch):
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    with patch("temporal_app.activities.billing_activities.httpx.AsyncClient") as mock_cls:
+    with patch(
+        "temporal_app.activities.billing_activities.httpx.AsyncClient"
+    ) as mock_cls:
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):
