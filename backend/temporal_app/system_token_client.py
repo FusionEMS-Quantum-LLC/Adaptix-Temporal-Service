@@ -97,36 +97,62 @@ class SystemTokenClient:
         self._timeout_s = (
             timeout_s if timeout_s is not None else config.SYSTEM_TOKEN_MINT_TIMEOUT_S
         )
-        self._cached: _CachedToken | None = None
+        # Tokens are cached per requested scope. The default (no scope)
+        # attribution token and a role-scoped token (e.g. ["billing_operator"])
+        # are distinct credentials and must not share a cache slot.
+        self._cached: dict[tuple[str, ...], _CachedToken] = {}
         self._lock = asyncio.Lock()
 
+    @staticmethod
+    def _scope_key(scope: list[str] | None) -> tuple[str, ...]:
+        """Normalise a requested scope into a deterministic cache key."""
+        if not scope:
+            return ()
+        # De-duplicate while preserving order so ["billing_operator"] and
+        # ["billing_operator","billing_operator"] map to the same slot.
+        seen: set[str] = set()
+        out: list[str] = []
+        for role in scope:
+            r = str(role).strip()
+            if r and r not in seen:
+                seen.add(r)
+                out.append(r)
+        return tuple(out)
+
     # -- public API -------------------------------------------------------- #
-    async def get_token(self, *, force_refresh: bool = False) -> str:
-        """Return a valid system JWT, minting/refreshing as needed."""
-        if not force_refresh and self._is_fresh():
-            assert self._cached is not None
-            return self._cached.token
+    async def get_token(
+        self, *, scope: list[str] | None = None, force_refresh: bool = False
+    ) -> str:
+        """Return a valid system JWT for ``scope``, minting/refreshing as needed.
+
+        ``scope`` is the list of role claims the worker needs the token to carry
+        (e.g. ``["billing_operator"]``). When omitted the token carries only the
+        default ``["system"]`` attribution role.
+        """
+        key = self._scope_key(scope)
+        if not force_refresh and self._is_fresh(key):
+            return self._cached[key].token
 
         async with self._lock:
             # Re-check under the lock — another caller may have refreshed while
             # we were waiting.
-            if not force_refresh and self._is_fresh():
-                assert self._cached is not None
-                return self._cached.token
-            return await self._mint_locked()
+            if not force_refresh and self._is_fresh(key):
+                return self._cached[key].token
+            return await self._mint_locked(key)
 
-    async def auth_header(self, *, force_refresh: bool = False) -> dict[str, str]:
+    async def auth_header(
+        self, *, scope: list[str] | None = None, force_refresh: bool = False
+    ) -> dict[str, str]:
         """Return the ``Authorization`` header for ADAPTIX_API_BASE calls."""
-        token = await self.get_token(force_refresh=force_refresh)
+        token = await self.get_token(scope=scope, force_refresh=force_refresh)
         return {"Authorization": f"Bearer {token}"}
 
     # -- internals --------------------------------------------------------- #
-    def _is_fresh(self) -> bool:
-        return (
-            self._cached is not None and time.monotonic() < self._cached.refresh_after
-        )
+    def _is_fresh(self, key: tuple[str, ...]) -> bool:
+        cached = self._cached.get(key)
+        return cached is not None and time.monotonic() < cached.refresh_after
 
-    async def _mint_locked(self) -> str:
+    async def _mint_locked(self, key: tuple[str, ...]) -> str:
         if not self._core_service_url:
             raise SystemTokenError(
                 "CORE_SERVICE_URL is not configured — cannot mint a system token. "
@@ -140,10 +166,16 @@ class SystemTokenClient:
 
         url = f"{self._core_service_url}{_MINT_PATH}"
         headers = {"Authorization": f"Bearer {self._provisioning_token}"}
+        # Request the role scope for this cache slot. An empty key mints the
+        # default attribution token (Core treats an absent/empty scope as
+        # ["system"]); a non-empty key requests those exact roles.
+        body: dict[str, object] = {}
+        if key:
+            body["scope"] = list(key)
         mint_started = time.monotonic()
         try:
             async with httpx.AsyncClient(timeout=self._timeout_s) as client:
-                resp = await client.post(url, headers=headers, json={})
+                resp = await client.post(url, headers=headers, json=body)
         except httpx.HTTPError as exc:
             # Network/connect/timeout — surface without leaking the token.
             raise SystemTokenError(
@@ -181,14 +213,15 @@ class SystemTokenClient:
         # Refresh slightly before expiry. Clamp so refresh_after is always in the
         # future even for very short TTLs.
         skew = min(self._refresh_skew_s, max(ttl - 1, 0))
-        self._cached = _CachedToken(
+        self._cached[key] = _CachedToken(
             token=token, refresh_after=mint_started + (ttl - skew)
         )
 
         logger.info(
-            "system_token_client: minted system token (ttl=%ds, refresh_skew=%ds); token value not logged",
+            "system_token_client: minted system token (ttl=%ds, refresh_skew=%ds, scope=%s); token value not logged",
             ttl,
             skew,
+            list(key) or ["system"],
         )
         return token
 

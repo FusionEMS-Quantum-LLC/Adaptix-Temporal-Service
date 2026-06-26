@@ -12,10 +12,16 @@ Every activity is:
   - Non-retryable error types: ValidationError (bad input that no retry will
     fix) and AuthorizationError (permission or token misconfiguration).
 
-Authentication:
-  ADAPTIX_SERVICE_TOKEN is injected via ECS task definition secret. It is
-  read from config at call time, not cached at module import, so a rolling
-  secret rotation is picked up without a container restart.
+Authentication (Phase 2):
+  Billing activities authenticate as the platform **system principal** with the
+  ``billing_operator`` role. They exchange the worker's CORE_PROVISIONING_TOKEN
+  (an ECS secret) for a short-lived RS256 system JWT via Core's internal
+  token-mint route (see :mod:`temporal_app.system_token_client`), then present
+  that JWT as ``Authorization: Bearer`` to the Billing Service **through the
+  gateway** (``ADAPTIX_API_BASE``). The minted JWT carries
+  ``roles=["billing_operator"]`` so it satisfies the Billing Service's
+  ``require_billing_operator`` dependency. The worker never holds the RS256
+  private key and never sends the raw provisioning token downstream.
 
 Error handling:
   httpx.HTTPStatusError with 4xx is raised as-is if not retryable.
@@ -33,11 +39,15 @@ from temporalio import activity
 
 from temporal_app.config import (
     ADAPTIX_API_BASE,
-    ADAPTIX_SERVICE_TOKEN,
     ACTIVITY_HTTP_TIMEOUT_S,
 )
+from temporal_app.system_token_client import get_system_token_client
 
 logger = logging.getLogger(__name__)
+
+# Role scope the Billing Service requires for claim/appeal/invoicing endpoints.
+# Mirrors the Billing Service ``require_billing_operator`` dependency.
+_BILLING_SCOPE: list[str] = ["billing_operator"]
 
 
 # ---------------------------------------------------------------------------
@@ -45,21 +55,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _auth_header() -> dict[str, str]:
-    """Build the Authorization header from the configured service token.
+async def _auth_header() -> dict[str, str]:
+    """Return the Authorization header carrying a minted system JWT.
 
-    Raises RuntimeError (non-retryable by Temporal) if the token is absent,
-    because no retry will resolve a missing credential. The ECS task definition
-    must be corrected and the worker redeployed.
+    Mints (or reuses a cached) short-lived RS256 system JWT scoped to
+    ``billing_operator`` and returns it as a Bearer header for calls to the
+    Billing Service through ``ADAPTIX_API_BASE``.
+
+    Raises :class:`SystemTokenError` (non-retryable by Temporal) when the
+    provisioning token or Core mint route is misconfigured — no retry will
+    resolve a missing/invalid credential; the deployment must be corrected.
     """
-    token = ADAPTIX_SERVICE_TOKEN
-    if not token:
-        raise RuntimeError(
-            "ADAPTIX_SERVICE_TOKEN is not configured. "
-            "Add it to the ECS task definition container secrets. "
-            "This error is non-retryable — fix the deployment."
-        )
-    return {"Authorization": f"Bearer {token}"}
+    return await get_system_token_client().auth_header(scope=_BILLING_SCOPE)
 
 
 def _api_url(path: str) -> str:
@@ -90,7 +97,9 @@ def _raise_for_non_retryable(exc: httpx.HTTPStatusError) -> None:
     if status in (401, 403):
         raise PermissionError(
             f"AuthorizationError: Billing API returned {status}. "
-            "Check ADAPTIX_SERVICE_TOKEN and RBAC configuration."
+            "The minted system JWT was rejected — check that the system "
+            "principal seed row is ACTIVE and carries the billing_operator "
+            "role, and that the gateway trusts the Core RS256 public key."
         ) from exc
     # Let other status codes propagate for Temporal retry.
     raise exc
@@ -121,7 +130,7 @@ async def submit_claim_to_clearinghouse(claim_id: str) -> dict[str, Any]:
         try:
             resp = await client.post(
                 _api_url(f"/api/v1/billing/claims/{claim_id}/submit-to-clearinghouse"),
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -156,7 +165,7 @@ async def get_claim_status(claim_id: str) -> dict[str, Any]:
         try:
             resp = await client.get(
                 _api_url(f"/api/v1/billing/claims/{claim_id}/clearinghouse-status"),
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -193,7 +202,7 @@ async def create_denial_appeal(claim_id: str, denial_code: str) -> dict[str, Any
             resp = await client.post(
                 _api_url(f"/api/v1/billing/claims/{claim_id}/appeal"),
                 json={"denial_code": denial_code},
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -230,7 +239,7 @@ async def resubmit_denied_claim(claim_id: str) -> dict[str, Any]:
         try:
             resp = await client.post(
                 _api_url(f"/api/v1/billing/claims/{claim_id}/submit-to-clearinghouse"),
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -269,7 +278,7 @@ async def process_era_file(era_file_path: str) -> dict[str, Any]:
             resp = await client.post(
                 _api_url("/api/v1/billing/claims/webhooks/835-remittance"),
                 json={"era_file_path": era_file_path},
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -315,7 +324,7 @@ async def run_monthly_agency_invoicing(billing_month: str) -> dict[str, Any]:
             resp = await client.post(
                 _api_url("/api/v1/billing/subscriptions/invoice-all-agencies"),
                 json={"billing_month": billing_month},
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
