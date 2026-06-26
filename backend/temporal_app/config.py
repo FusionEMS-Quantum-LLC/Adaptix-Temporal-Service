@@ -12,9 +12,20 @@ Environment variables:
                             Required. Worker refuses to start without a recognised value.
     ADAPTIX_API_BASE      — Base URL for internal Adaptix service API calls.
                             Required. All activities fail if absent.
-    ADAPTIX_SERVICE_TOKEN — Bearer token for inter-service API authentication.
-                            Required. All activities fail if absent.
-                            Sourced from AWS Secrets Manager via ECS task definition.
+    CORE_PROVISIONING_TOKEN — Bearer token presented to Core's internal
+                            token-mint route to obtain a short-lived system JWT.
+                            Required. Sourced from AWS Secrets Manager
+                            (adaptix/production/core/service-token) via the ECS
+                            task definition. Workers hold ONLY this token, never
+                            the RS256 private key.
+    CORE_SERVICE_URL      — Cloud Map direct-hop base for the Core token-mint
+                            call (e.g. http://core.adaptix.internal:8000).
+                            Required for the system-token client.
+    ADAPTIX_SERVICE_TOKEN — DEPRECATED legacy alias. Phase 1 keeps it as a
+                            fallback for CORE_PROVISIONING_TOKEN so existing
+                            activities continue to work until Phase 2 re-points
+                            them to the system-token client. Prefer
+                            CORE_PROVISIONING_TOKEN.
     AWS_REGION            — AWS region for boto3 calls. Defaults to us-east-1.
     WORKER_MAX_CONCURRENT_WORKFLOW_TASKS
                           — Max concurrent workflow task poll slots. Default 40.
@@ -51,7 +62,38 @@ VALID_TASK_QUEUES: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 
 ADAPTIX_API_BASE: str = os.environ.get("ADAPTIX_API_BASE", "").rstrip("/")
-ADAPTIX_SERVICE_TOKEN: str | None = os.environ.get("ADAPTIX_SERVICE_TOKEN") or None
+
+# Core token-mint configuration (Temporal worker activation Phase 1).
+# CORE_PROVISIONING_TOKEN is the preferred credential; ADAPTIX_SERVICE_TOKEN is
+# kept as a legacy fallback so Phase-1 does not break activities that have not
+# yet been re-pointed to the system-token client (that re-point is Phase 2).
+CORE_PROVISIONING_TOKEN: str | None = (
+    os.environ.get("CORE_PROVISIONING_TOKEN")
+    or os.environ.get("ADAPTIX_SERVICE_TOKEN")
+    or None
+)
+CORE_SERVICE_URL: str = os.environ.get("CORE_SERVICE_URL", "").rstrip("/")
+
+# Backward-compatible alias. Existing activity modules import
+# ADAPTIX_SERVICE_TOKEN directly; resolve it to the provisioning token so they
+# keep authenticating during Phase 1. Phase 2 replaces these direct uses with
+# the system-token client.
+ADAPTIX_SERVICE_TOKEN: str | None = CORE_PROVISIONING_TOKEN
+
+# System-token client tuning.
+# Refresh the cached system JWT this many seconds BEFORE its exp so an in-flight
+# request never carries an about-to-expire token.
+SYSTEM_TOKEN_REFRESH_SKEW_S: int = int(
+    os.environ.get("SYSTEM_TOKEN_REFRESH_SKEW_S", "30")
+)
+# Default lifetime assumed when Core does not return expires_in (it does today).
+SYSTEM_TOKEN_DEFAULT_TTL_S: int = int(
+    os.environ.get("SYSTEM_TOKEN_DEFAULT_TTL_S", "300")
+)
+# Timeout for the Core token-mint HTTP call.
+SYSTEM_TOKEN_MINT_TIMEOUT_S: float = float(
+    os.environ.get("SYSTEM_TOKEN_MINT_TIMEOUT_S", "10")
+)
 
 # ---------------------------------------------------------------------------
 # AWS
@@ -135,10 +177,18 @@ def validate_config() -> list[str]:
     if not ADAPTIX_API_BASE:
         errors.append("ADAPTIX_API_BASE is required (e.g. https://api.adaptixcore.com)")
 
-    if not ADAPTIX_SERVICE_TOKEN:
+    if not CORE_PROVISIONING_TOKEN:
         errors.append(
-            "ADAPTIX_SERVICE_TOKEN is required for inter-service API authentication. "
-            "Set this via ECS task definition secret (AWS Secrets Manager)."
+            "CORE_PROVISIONING_TOKEN is required for inter-service API authentication "
+            "(legacy ADAPTIX_SERVICE_TOKEN accepted as a fallback). "
+            "Set this via ECS task definition secret (AWS Secrets Manager, "
+            "adaptix/production/core/service-token)."
+        )
+
+    if not CORE_SERVICE_URL:
+        errors.append(
+            "CORE_SERVICE_URL is required for the Core system-token mint call "
+            "(e.g. http://core.adaptix.internal:8000)."
         )
 
     return errors
