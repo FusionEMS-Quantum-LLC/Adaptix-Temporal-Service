@@ -48,7 +48,8 @@ def test_validate_config_all_present(monkeypatch):
             "TEMPORAL_HOST": "temporal.internal:7233",
             "TASK_QUEUE": "billing",
             "ADAPTIX_API_BASE": "https://api.adaptixcore.internal",
-            "ADAPTIX_SERVICE_TOKEN": "token-abc",
+            "CORE_SERVICE_URL": "http://core.adaptix.internal:8000",
+            "CORE_PROVISIONING_TOKEN": "token-abc",
         },
     )
     errors = cfg.validate_config()
@@ -115,19 +116,54 @@ def test_validate_config_missing_api_base(monkeypatch):
     assert any("ADAPTIX_API_BASE" in e for e in errors)
 
 
-def test_validate_config_missing_service_token(monkeypatch):
-    """Missing ADAPTIX_SERVICE_TOKEN produces an error."""
+def test_validate_config_missing_provisioning_token(monkeypatch):
+    """Missing CORE_PROVISIONING_TOKEN (and legacy fallback) produces an error."""
     cfg = _reload_config(
         monkeypatch,
         {
             "TEMPORAL_HOST": "temporal.internal:7233",
             "TASK_QUEUE": "billing",
             "ADAPTIX_API_BASE": "https://api.adaptixcore.internal",
+            "CORE_SERVICE_URL": "http://core.adaptix.internal:8000",
+            "CORE_PROVISIONING_TOKEN": "",
             "ADAPTIX_SERVICE_TOKEN": "",
         },
     )
     errors = cfg.validate_config()
-    assert any("ADAPTIX_SERVICE_TOKEN" in e for e in errors)
+    assert any("CORE_PROVISIONING_TOKEN" in e for e in errors)
+
+
+def test_legacy_service_token_satisfies_provisioning_token(monkeypatch):
+    """ADAPTIX_SERVICE_TOKEN still satisfies the provisioning-token requirement."""
+    cfg = _reload_config(
+        monkeypatch,
+        {
+            "TEMPORAL_HOST": "temporal.internal:7233",
+            "TASK_QUEUE": "billing",
+            "ADAPTIX_API_BASE": "https://api.adaptixcore.internal",
+            "CORE_SERVICE_URL": "http://core.adaptix.internal:8000",
+            "CORE_PROVISIONING_TOKEN": "",
+            "ADAPTIX_SERVICE_TOKEN": "legacy-token",
+        },
+    )
+    errors = cfg.validate_config()
+    assert not any("CORE_PROVISIONING_TOKEN" in e for e in errors)
+
+
+def test_validate_config_missing_core_service_url(monkeypatch):
+    """Missing CORE_SERVICE_URL produces an error."""
+    cfg = _reload_config(
+        monkeypatch,
+        {
+            "TEMPORAL_HOST": "temporal.internal:7233",
+            "TASK_QUEUE": "billing",
+            "ADAPTIX_API_BASE": "https://api.adaptixcore.internal",
+            "CORE_SERVICE_URL": "",
+            "CORE_PROVISIONING_TOKEN": "token-abc",
+        },
+    )
+    errors = cfg.validate_config()
+    assert any("CORE_SERVICE_URL" in e for e in errors)
 
 
 def test_valid_task_queues_accepted(monkeypatch):
@@ -140,7 +176,8 @@ def test_valid_task_queues_accepted(monkeypatch):
                 "TEMPORAL_HOST": "temporal.internal:7233",
                 "TASK_QUEUE": queue,
                 "ADAPTIX_API_BASE": "https://api.adaptixcore.internal",
-                "ADAPTIX_SERVICE_TOKEN": "token-abc",
+                "CORE_SERVICE_URL": "http://core.adaptix.internal:8000",
+                "CORE_PROVISIONING_TOKEN": "token-abc",
             },
         )
         errors = cfg.validate_config()

@@ -146,7 +146,12 @@ async def test_submit_claim_missing_token_raises_runtime_error(monkeypatch):
     """submit_claim_to_clearinghouse raises RuntimeError when service token is absent."""
     import sys
 
+    # Both the preferred CORE_PROVISIONING_TOKEN and the legacy
+    # ADAPTIX_SERVICE_TOKEN fallback must be absent for the credential to
+    # resolve empty (config: CORE_PROVISIONING_TOKEN = env CORE_PROVISIONING_TOKEN
+    # or env ADAPTIX_SERVICE_TOKEN; the ADAPTIX_SERVICE_TOKEN alias mirrors it).
     monkeypatch.setenv("ADAPTIX_SERVICE_TOKEN", "")
+    monkeypatch.setenv("CORE_PROVISIONING_TOKEN", "")
 
     # Reload config and activities to pick up the empty token.
     for mod in list(sys.modules.keys()):
@@ -159,9 +164,10 @@ async def test_submit_claim_missing_token_raises_runtime_error(monkeypatch):
         with pytest.raises(RuntimeError, match="ADAPTIX_SERVICE_TOKEN"):
             await billing_activities.submit_claim_to_clearinghouse("claim-abc")
 
-    # Restore the token so subsequent tests in this process are not affected
+    # Restore the tokens so subsequent tests in this process are not affected
     # by the module purge.
     monkeypatch.setenv("ADAPTIX_SERVICE_TOKEN", "test-service-token-not-a-real-secret")
+    monkeypatch.setenv("CORE_PROVISIONING_TOKEN", "test-core-provisioning-token-not-a-real-secret")
     for mod in list(sys.modules.keys()):
         if "temporal_app" in mod:
             del sys.modules[mod]
