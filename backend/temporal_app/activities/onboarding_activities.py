@@ -23,6 +23,7 @@ all state changes go through the authenticated API with audit logging.
 
 from __future__ import annotations
 
+import html
 import logging
 from typing import Any
 
@@ -31,21 +32,29 @@ from temporalio import activity
 
 from temporal_app.config import (
     ADAPTIX_API_BASE,
-    ADAPTIX_SERVICE_TOKEN,
     ACTIVITY_HTTP_TIMEOUT_S,
 )
+from temporal_app.system_token_client import get_system_token_client
 
 logger = logging.getLogger(__name__)
 
+# Onboarding drives cross-tenant go-live operations (provision is founder-gated;
+# complete/readiness accept founder OR the owning agency driver). Core's minter
+# maps the logical "onboarding" scope to is_founder=True + ["founder"]
+# (see core_app.auth.system_identity._SCOPE_ROLE_MAP).
+_ONBOARDING_SCOPE: list[str] = ["onboarding"]
 
-def _auth_header() -> dict[str, str]:
-    token = ADAPTIX_SERVICE_TOKEN
-    if not token:
-        raise RuntimeError(
-            "ADAPTIX_SERVICE_TOKEN is not configured. "
-            "This error is non-retryable — fix the deployment."
-        )
-    return {"Authorization": f"Bearer {token}"}
+
+async def _auth_header() -> dict[str, str]:
+    """Return the Authorization header carrying a minted founder system JWT.
+
+    Mints (or reuses) a short-lived RS256 system JWT scoped to ``onboarding``
+    (founder) for calls to Core go-live routes and Communications through the
+    gateway (``ADAPTIX_API_BASE``). The worker never holds the RS256 private
+    key. Raises ``SystemTokenError`` (non-retryable) on a misconfigured
+    provisioning token or mint route.
+    """
+    return await get_system_token_client().auth_header(scope=_ONBOARDING_SCOPE)
 
 
 def _api_url(path: str) -> str:
@@ -95,7 +104,7 @@ async def get_onboarding_case(tenant_id: str) -> dict[str, Any]:
             resp = await client.get(
                 _api_url("/api/v1/go-live/cases"),
                 params={"tenant_id": tenant_id},
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -110,63 +119,21 @@ async def get_onboarding_case(tenant_id: str) -> dict[str, Any]:
 
 
 @activity.defn
-async def advance_onboarding_step(
-    case_id: str,
-    step_key: str,
-) -> dict[str, Any]:
-    """Advance a Go-Live pipeline step to in_progress.
-
-    Calls: POST /api/v1/go-live/cases/{case_id}/steps/{step_key}/advance
-
-    The Core Service validates predecessor completion before advancing.
-    Returns the updated step record.
-
-    step_key: canonical step key from the STEP_CATALOG, e.g.
-              "tenant_provisioned", "workspace_created", "admin_invited".
-    """
-    activity.heartbeat("advancing_onboarding_step")
-    logger.info(
-        "onboarding_activity.advance_step case_id=%s step_key=%s",
-        case_id,
-        step_key,
-    )
-
-    async with httpx.AsyncClient(timeout=ACTIVITY_HTTP_TIMEOUT_S) as client:
-        try:
-            resp = await client.post(
-                _api_url(f"/api/v1/go-live/cases/{case_id}/steps/{step_key}/advance"),
-                headers=_auth_header(),
-            )
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            logger.error(
-                "onboarding_activity.advance_step case_id=%s step_key=%s status=%s",
-                case_id,
-                step_key,
-                exc.response.status_code,
-            )
-            _raise_for_non_retryable(exc)
-
-    return resp.json()
-
-
-@activity.defn
 async def complete_onboarding_step(
     case_id: str,
     step_key: str,
+    notes: str | None = None,
 ) -> dict[str, Any]:
     """Mark a Go-Live pipeline step complete.
 
     Calls: POST /api/v1/go-live/cases/{case_id}/steps/{step_key}/complete
+    Body:  StepCompleteRequest{notes: str | None}.
 
-    Used by the AgencyOnboardingWorkflow to drive the 31-step pipeline
-    through programmatic completion as each sub-workflow or activity confirms
-    the underlying operation succeeded.
-
-    The Core Service enforces:
-      - Predecessor completion validation
-      - Idempotency (re-completing a step is a no-op)
-      - Audit logging via core_audit_logs
+    Used by the AgencyOnboardingWorkflow to drive the pipeline through
+    programmatic completion as each activity confirms the underlying operation
+    succeeded. The Core Service enforces predecessor validation, idempotency,
+    and audit logging. Auth: founder OR the owning agency driver — the minted
+    ``onboarding`` (founder) token satisfies this.
     """
     activity.heartbeat("completing_onboarding_step")
     logger.info(
@@ -179,7 +146,8 @@ async def complete_onboarding_step(
         try:
             resp = await client.post(
                 _api_url(f"/api/v1/go-live/cases/{case_id}/steps/{step_key}/complete"),
-                headers=_auth_header(),
+                json={"notes": notes},
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -195,36 +163,31 @@ async def complete_onboarding_step(
 
 
 @activity.defn
-async def provision_tenant(tenant_id: str) -> dict[str, Any]:
-    """Confirm tenant provisioning completion in the Go-Live pipeline.
+async def provision_case(case_id: str) -> dict[str, Any]:
+    """Provision the tenant + workspace for a Go-Live case.
 
-    Calls: POST /api/v1/onboarding/internal/confirm-provisioned
+    Calls: POST /api/v1/go-live/cases/{case_id}/provision (founder-gated).
+    Body:  empty (the provisioner derives all data from the case).
 
-    This activity is called after the tenant row and workspace have already
-    been created (which happens synchronously during signup). It marks the
-    "tenant_provisioned" and "workspace_created" steps complete in the
-    Go-Live pipeline and triggers the post-provisioning audit event.
-
-    The Core Service tenant_provisioner module enforces:
-      - Case must have reached baa_msa_complete
-      - Tenant ID must already exist in core_tenants
-      - Idempotency guard prevents double-provisioning
+    The Core provisioner creates / confirms the tenant row and workspace and
+    advances the pipeline. The minted ``onboarding`` token carries founder
+    authority, satisfying the route's ``require_founder`` gate.
     """
-    activity.heartbeat("confirming_tenant_provisioned")
-    logger.info("onboarding_activity.provision_tenant tenant_id=%s", tenant_id)
+    activity.heartbeat("provisioning_case")
+    logger.info("onboarding_activity.provision_case case_id=%s", case_id)
 
     async with httpx.AsyncClient(timeout=ACTIVITY_HTTP_TIMEOUT_S) as client:
         try:
             resp = await client.post(
-                _api_url("/api/v1/onboarding/internal/confirm-provisioned"),
-                json={"tenant_id": tenant_id},
-                headers=_auth_header(),
+                _api_url(f"/api/v1/go-live/cases/{case_id}/provision"),
+                json={},
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
             logger.error(
-                "onboarding_activity.provision_tenant tenant_id=%s status=%s",
-                tenant_id,
+                "onboarding_activity.provision_case case_id=%s status=%s",
+                case_id,
                 exc.response.status_code,
             )
             _raise_for_non_retryable(exc)
@@ -233,46 +196,38 @@ async def provision_tenant(tenant_id: str) -> dict[str, Any]:
 
 
 @activity.defn
-async def run_go_live_readiness_check(tenant_id: str) -> dict[str, Any]:
-    """Run the Go-Live readiness scoring engine for the tenant.
+async def run_go_live_readiness_check(case_id: str) -> dict[str, Any]:
+    """Score Go-Live readiness for a case.
 
-    Calls: GET /api/v1/workspace/go-live-readiness
+    Calls: GET /api/v1/go-live/cases/{case_id}/readiness (case-scoped).
 
-    Returns the readiness snapshot including:
-      - overall_score (0-100)
-      - go_live_ready (bool, True iff score >= 80)
-      - sub_scores breakdown
-      - blocking_items list
-
-    Used by AgencyOnboardingWorkflow to determine whether the tenant is
-    ready for workspace activation.
+    Returns the readiness snapshot (overall_score, go_live_ready, sub-scores,
+    blocking items). Auth: founder OR the owning agency driver — satisfied by
+    the minted ``onboarding`` token.
     """
     activity.heartbeat("running_go_live_check")
-    logger.info("onboarding_activity.go_live_readiness_check tenant_id=%s", tenant_id)
+    logger.info("onboarding_activity.go_live_readiness_check case_id=%s", case_id)
 
     async with httpx.AsyncClient(timeout=ACTIVITY_HTTP_TIMEOUT_S) as client:
         try:
             resp = await client.get(
-                _api_url("/api/v1/workspace/go-live-readiness"),
-                headers={
-                    **_auth_header(),
-                    "X-Tenant-Id": tenant_id,
-                },
+                _api_url(f"/api/v1/go-live/cases/{case_id}/readiness"),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
             logger.error(
-                "onboarding_activity.go_live_readiness_check tenant_id=%s status=%s",
-                tenant_id,
+                "onboarding_activity.go_live_readiness_check case_id=%s status=%s",
+                case_id,
                 exc.response.status_code,
             )
             _raise_for_non_retryable(exc)
 
     result = resp.json()
     logger.info(
-        "onboarding_activity.go_live_readiness_check tenant_id=%s "
+        "onboarding_activity.go_live_readiness_check case_id=%s "
         "score=%s go_live_ready=%s",
-        tenant_id,
+        case_id,
         result.get("overall_score"),
         result.get("go_live_ready"),
     )
@@ -305,7 +260,7 @@ async def unlock_workspace(tenant_id: str) -> dict[str, Any]:
                     "tenant_id": tenant_id,
                     "unlock_authority": "onboarding_completion",
                 },
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -353,7 +308,7 @@ async def configure_billing_provider_identity(tenant_id: str) -> dict[str, Any]:
                 ),
                 json={"status": "complete"},
                 headers={
-                    **_auth_header(),
+                    **(await _auth_header()),
                     "X-Tenant-Id": tenant_id,
                 },
             )
@@ -374,12 +329,12 @@ async def configure_billing_provider_identity(tenant_id: str) -> dict[str, Any]:
 async def send_go_live_notification(tenant_id: str, admin_email: str) -> dict[str, Any]:
     """Send the agency go-live notification email to the agency admin.
 
-    Calls: POST /api/v1/notifications/email/send
+    Calls: POST /api/v1/communications/email/send (through the gateway).
+    Body:  SendEmailRequest{to: [admin_email], subject, body_html, body_text}.
 
-    Sends the "Your agency is now live on AdaptixCore" email via SES.
-    This is distinct from the welcome email sent by the workspace unlock —
-    the go-live notification confirms operational readiness and includes
-    next-steps guidance.
+    Sends the "Your agency is now live on AdaptixCore" email. Distinct from the
+    welcome email sent by the workspace unlock — this confirms operational
+    readiness. The body is a fixed go-live confirmation (no template catalog).
 
     PHI-safe: admin_email is not logged.
     """
@@ -389,17 +344,21 @@ async def send_go_live_notification(tenant_id: str, admin_email: str) -> dict[st
         tenant_id,
     )
 
+    body_text = (
+        "Your agency is now live on AdaptixCore. "
+        "Sign in to your workspace to begin operations."
+    )
     async with httpx.AsyncClient(timeout=ACTIVITY_HTTP_TIMEOUT_S) as client:
         try:
             resp = await client.post(
-                _api_url("/api/v1/notifications/email/send"),
+                _api_url("/api/v1/communications/email/send"),
                 json={
-                    "to": admin_email,
+                    "to": [admin_email],
                     "subject": "Your agency is now live on AdaptixCore",
-                    "template": "agency_go_live",
-                    "context": {"tenant_id": tenant_id},
+                    "body_html": f"<p>{html.escape(body_text)}</p>",
+                    "body_text": body_text,
                 },
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:

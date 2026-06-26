@@ -21,11 +21,10 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from temporal_app.activities.onboarding_activities import (
-        advance_onboarding_step,
         complete_onboarding_step,
         configure_billing_provider_identity,
         get_onboarding_case,
-        provision_tenant,
+        provision_case,
         run_go_live_readiness_check,
         send_go_live_notification,
         unlock_workspace,
@@ -94,18 +93,23 @@ class AgencyOnboardingWorkflow:
             start_to_close_timeout=_ACTIVITY_TIMEOUT,
             retry_policy=DEFAULT_RETRY_POLICY,
         )
-        case_id: str = case.get("case_id", "")
+        case_id: str = (case or {}).get("case_id", "")
         results["case_id"] = case_id
+        if not case_id:
+            raise RuntimeError(
+                f"AgencyOnboardingWorkflow: no Go-Live case found for tenant {tenant_id}."
+            )
         workflow.logger.info(
             "AgencyOnboardingWorkflow case_fetched tenant_id=%s case_id=%s",
             tenant_id,
             case_id,
         )
 
-        # Step 2: confirm tenant provisioned
+        # Step 2: provision the tenant + workspace for this case (founder-gated,
+        # idempotent in Core).
         provisioned: dict[str, Any] = await workflow.execute_activity(
-            provision_tenant,
-            tenant_id,
+            provision_case,
+            case_id,
             start_to_close_timeout=_ACTIVITY_TIMEOUT,
             retry_policy=_ONBOARDING_RETRY,
         )
@@ -115,10 +119,10 @@ class AgencyOnboardingWorkflow:
             tenant_id,
         )
 
-        # Step 3: run go-live readiness check
+        # Step 3: run go-live readiness check (case-scoped)
         readiness: dict[str, Any] = await workflow.execute_activity(
             run_go_live_readiness_check,
-            tenant_id,
+            case_id,
             start_to_close_timeout=_ACTIVITY_TIMEOUT,
             retry_policy=DEFAULT_RETRY_POLICY,
         )
@@ -144,25 +148,19 @@ class AgencyOnboardingWorkflow:
             tenant_id,
         )
 
-        # Step 5: advance and complete key pipeline steps (if case_id available)
-        if case_id:
-            for step_key in [
-                "workspace_activated",
-                "billing_configured",
-                "first_user_invited",
-            ]:
-                await workflow.execute_activity(
-                    advance_onboarding_step,
-                    args=[case_id, step_key],
-                    start_to_close_timeout=_ACTIVITY_TIMEOUT,
-                    retry_policy=_ONBOARDING_RETRY,
-                )
-                await workflow.execute_activity(
-                    complete_onboarding_step,
-                    args=[case_id, step_key],
-                    start_to_close_timeout=_ACTIVITY_TIMEOUT,
-                    retry_policy=_ONBOARDING_RETRY,
-                )
+        # Step 5: complete key pipeline steps (Core completes a step directly;
+        # there is no separate advance hop).
+        for step_key in [
+            "workspace_activated",
+            "billing_configured",
+            "first_user_invited",
+        ]:
+            await workflow.execute_activity(
+                complete_onboarding_step,
+                args=[case_id, step_key],
+                start_to_close_timeout=_ACTIVITY_TIMEOUT,
+                retry_policy=_ONBOARDING_RETRY,
+            )
         workflow.logger.info(
             "AgencyOnboardingWorkflow pipeline_steps_completed tenant_id=%s",
             tenant_id,

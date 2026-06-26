@@ -15,9 +15,8 @@ This worker registers:
     - AgencyOnboardingWorkflow
   Activities:
     - get_onboarding_case
-    - advance_onboarding_step
     - complete_onboarding_step
-    - provision_tenant
+    - provision_case
     - run_go_live_readiness_check
     - configure_billing_provider_identity
     - unlock_workspace
@@ -34,11 +33,10 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from temporal_app.activities.onboarding_activities import (
-    advance_onboarding_step,
     complete_onboarding_step,
     configure_billing_provider_identity,
     get_onboarding_case,
-    provision_tenant,
+    provision_case,
     run_go_live_readiness_check,
     send_go_live_notification,
     unlock_workspace,
@@ -90,9 +88,8 @@ async def main() -> None:
         ],
         activities=[
             get_onboarding_case,
-            advance_onboarding_step,
             complete_onboarding_step,
-            provision_tenant,
+            provision_case,
             run_go_live_readiness_check,
             configure_billing_provider_identity,
             unlock_workspace,

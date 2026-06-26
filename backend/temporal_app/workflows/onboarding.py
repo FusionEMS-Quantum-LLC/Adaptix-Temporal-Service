@@ -40,11 +40,10 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from temporal_app.activities.onboarding_activities import (
-        advance_onboarding_step,
         complete_onboarding_step,
         configure_billing_provider_identity,
         get_onboarding_case,
-        provision_tenant,
+        provision_case,
         run_go_live_readiness_check,
         send_go_live_notification,
         unlock_workspace,
@@ -87,10 +86,24 @@ class WorkspaceActivationWorkflow:
             "WorkspaceActivationWorkflow started tenant_id=%s", tenant_id
         )
 
-        # Step 1: Run readiness check.
+        # Step 0: Resolve the Go-Live case for this tenant (readiness and
+        # provision routes are case-scoped).
+        case = await workflow.execute_activity(
+            get_onboarding_case,
+            tenant_id,
+            start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=DEFAULT_RETRY_POLICY,
+        )
+        case_id: str = (case or {}).get("case_id", "")
+        if not case_id:
+            raise RuntimeError(
+                f"WorkspaceActivationWorkflow: no Go-Live case found for tenant {tenant_id}."
+            )
+
+        # Step 1: Run readiness check (case-scoped).
         readiness = await workflow.execute_activity(
             run_go_live_readiness_check,
-            tenant_id,
+            case_id,
             start_to_close_timeout=timedelta(minutes=3),
             retry_policy=DEFAULT_RETRY_POLICY,
         )
@@ -185,15 +198,8 @@ class AgencyOnboardingWorkflow:
     async def run(self, tenant_id: str) -> dict:
         workflow.logger.info("AgencyOnboardingWorkflow started tenant_id=%s", tenant_id)
 
-        # Step 1: Confirm tenant provisioning.
-        await workflow.execute_activity(
-            provision_tenant,
-            tenant_id,
-            start_to_close_timeout=timedelta(minutes=3),
-            retry_policy=DEFAULT_RETRY_POLICY,
-        )
-
-        # Step 2: Get the current Go-Live case.
+        # Step 1: Get the current Go-Live case (readiness/provision are
+        # case-scoped, so the case_id is resolved first).
         case = await workflow.execute_activity(
             get_onboarding_case,
             tenant_id,
@@ -201,25 +207,27 @@ class AgencyOnboardingWorkflow:
             retry_policy=DEFAULT_RETRY_POLICY,
         )
 
-        case_id: str = case.get("case_id", "")
+        case_id: str = (case or {}).get("case_id", "")
+        if not case_id:
+            raise RuntimeError(
+                f"AgencyOnboardingWorkflow: no Go-Live case found for tenant {tenant_id}."
+            )
         workflow.logger.info(
             "AgencyOnboardingWorkflow case_id=%s tenant_id=%s",
             case_id,
             tenant_id,
         )
 
-        # Step 3: Advance the lead_captured and agency_qualified steps to
-        # in_progress. These are automatically advanced for programmatically
-        # created cases — the workflow confirms the advance happened.
-        for step_key in ("lead_captured", "agency_qualified"):
-            await workflow.execute_activity(
-                advance_onboarding_step,
-                args=[case_id, step_key],
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=DEFAULT_RETRY_POLICY,
-            )
+        # Step 2: Provision the tenant + workspace for this case (founder-gated,
+        # idempotent in Core).
+        await workflow.execute_activity(
+            provision_case,
+            case_id,
+            start_to_close_timeout=timedelta(minutes=3),
+            retry_policy=DEFAULT_RETRY_POLICY,
+        )
 
-        # Step 4: Poll for readiness. Human-gated steps (BAA, payer setup,
+        # Step 3: Poll for readiness. Human-gated steps (BAA, payer setup,
         # staff setup, RBAC, billing profile) are completed in the UI.
         # We poll every POLL_INTERVAL_HOURS until the score >= 80.
         admin_email: str = case.get("admin_email", "")
@@ -227,7 +235,7 @@ class AgencyOnboardingWorkflow:
         for cycle in range(_MAX_WAIT_CYCLES):
             readiness = await workflow.execute_activity(
                 run_go_live_readiness_check,
-                tenant_id,
+                case_id,
                 start_to_close_timeout=timedelta(minutes=3),
                 retry_policy=DEFAULT_RETRY_POLICY,
             )

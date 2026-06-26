@@ -23,21 +23,29 @@ from temporalio import activity
 
 from temporal_app.config import (
     ADAPTIX_API_BASE,
-    ADAPTIX_SERVICE_TOKEN,
     ACTIVITY_HTTP_TIMEOUT_S,
 )
+from temporal_app.system_token_client import get_system_token_client
 
 logger = logging.getLogger(__name__)
 
+# Core's minter maps the logical "documents" scope to ["agency_admin"]
+# (see core_app.auth.system_identity._SCOPE_ROLE_MAP). Document/TrustSign
+# routes are tenant-scoped; the minted token carries the system tenant +
+# agency_admin role and authenticates through the gateway.
+_DOCUMENTS_SCOPE: list[str] = ["documents"]
 
-def _auth_header() -> dict[str, str]:
-    token = ADAPTIX_SERVICE_TOKEN
-    if not token:
-        raise RuntimeError(
-            "ADAPTIX_SERVICE_TOKEN is not configured. "
-            "This error is non-retryable — fix the deployment."
-        )
-    return {"Authorization": f"Bearer {token}"}
+
+async def _auth_header() -> dict[str, str]:
+    """Return the Authorization header carrying a minted ``documents`` JWT.
+
+    Mints (or reuses) a short-lived RS256 system JWT scoped to ``documents``
+    for calls to the Documents/Billing services through the gateway
+    (``ADAPTIX_API_BASE``). The worker never holds the RS256 private key.
+    Raises ``SystemTokenError`` (non-retryable) on a misconfigured provisioning
+    token or mint route.
+    """
+    return await get_system_token_client().auth_header(scope=_DOCUMENTS_SCOPE)
 
 
 def _api_url(path: str) -> str:
@@ -108,7 +116,7 @@ async def generate_pdf_document(
                     "context": context,
                     "output_key": output_key,
                 },
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -168,9 +176,9 @@ async def initiate_trustsign_envelope(
                 _api_url("/api/v1/documents/trustsign/envelopes"),
                 json={
                     "document_id": document_id,
-                    "recipient_email": recipient_email,
+                    "signers": [{"email": recipient_email}],
                 },
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -214,7 +222,7 @@ async def poll_trustsign_status(envelope_id: str) -> dict[str, Any]:
         try:
             resp = await client.get(
                 _api_url(f"/api/v1/documents/trustsign/envelopes/{envelope_id}"),
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -254,7 +262,7 @@ async def finalize_trustsign_envelope(envelope_id: str) -> dict[str, Any]:
                 _api_url(
                     f"/api/v1/documents/trustsign/envelopes/{envelope_id}/finalize"
                 ),
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -305,7 +313,7 @@ async def send_statement_via_postgrid(statement_id: str) -> dict[str, Any]:
         try:
             resp = await client.post(
                 _api_url(f"/api/v1/billing/statements/{statement_id}/send-mail"),
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
