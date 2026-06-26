@@ -46,4 +46,10 @@ USER appuser
 # ECS health checks should use the temporal worker liveness probe (future
 # HTTP healthz endpoint) or ECS task status.
 
+# entrypoint.sh validates required env vars, then exec's the container command.
+# Each ECS worker task overrides CMD with its own entrypoint, e.g.
+#   command = ["python", "-m", "workers.onboarding_worker"]
+# When no command is supplied, the default CMD below runs the multiplexed
+# worker which routes on the TASK_QUEUE env var.
 ENTRYPOINT ["sh", "/app/entrypoint.sh"]
+CMD ["python", "-m", "temporal_app.worker"]
