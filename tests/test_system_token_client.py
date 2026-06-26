@@ -36,7 +36,9 @@ _SYSTEM_JWT = "eyTESTHEADER.eyTESTPAYLOAD.TESTSIGNATURE"
 class _MintRecorder:
     """Records mint calls and returns a configurable response."""
 
-    def __init__(self, token: str = _SYSTEM_JWT, expires_in: int = 300, status: int = 200) -> None:
+    def __init__(
+        self, token: str = _SYSTEM_JWT, expires_in: int = 300, status: int = 200
+    ) -> None:
         self.calls: list[httpx.Request] = []
         self.token = token
         self.expires_in = expires_in
@@ -46,7 +48,9 @@ class _MintRecorder:
         self.calls.append(request)
         if self.status != 200:
             return httpx.Response(self.status, json={"detail": "denied"})
-        return httpx.Response(200, json={"token": self.token, "expires_in": self.expires_in})
+        return httpx.Response(
+            200, json={"token": self.token, "expires_in": self.expires_in}
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -77,7 +81,9 @@ def patch_async_client(monkeypatch):
 async def test_mint_sends_provisioning_token_bearer(patch_async_client) -> None:
     rec = _MintRecorder()
     patch_async_client(rec)
-    client = SystemTokenClient(core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN)
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN
+    )
 
     token = await client.get_token()
     assert token == _SYSTEM_JWT
@@ -91,7 +97,9 @@ async def test_mint_sends_provisioning_token_bearer(patch_async_client) -> None:
 async def test_token_is_cached_and_reused(patch_async_client) -> None:
     rec = _MintRecorder(expires_in=300)
     patch_async_client(rec)
-    client = SystemTokenClient(core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN)
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN
+    )
 
     t1 = await client.get_token()
     t2 = await client.get_token()
@@ -136,7 +144,9 @@ async def test_token_refreshes_before_expiry(patch_async_client, monkeypatch) ->
 async def test_force_refresh_remints(patch_async_client) -> None:
     rec = _MintRecorder(expires_in=300)
     patch_async_client(rec)
-    client = SystemTokenClient(core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN)
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN
+    )
     await client.get_token()
     await client.get_token(force_refresh=True)
     assert len(rec.calls) == 2
@@ -146,7 +156,9 @@ async def test_force_refresh_remints(patch_async_client) -> None:
 async def test_auth_header_is_bearer_system_jwt(patch_async_client) -> None:
     rec = _MintRecorder()
     patch_async_client(rec)
-    client = SystemTokenClient(core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN)
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN
+    )
     header = await client.auth_header()
     assert header == {"Authorization": f"Bearer {_SYSTEM_JWT}"}
 
@@ -155,7 +167,9 @@ async def test_auth_header_is_bearer_system_jwt(patch_async_client) -> None:
 async def test_401_is_non_retryable_error(patch_async_client) -> None:
     rec = _MintRecorder(status=401)
     patch_async_client(rec)
-    client = SystemTokenClient(core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN)
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN
+    )
     with pytest.raises(SystemTokenError):
         await client.get_token()
 
@@ -164,7 +178,9 @@ async def test_401_is_non_retryable_error(patch_async_client) -> None:
 async def test_403_is_non_retryable_error(patch_async_client) -> None:
     rec = _MintRecorder(status=403)
     patch_async_client(rec)
-    client = SystemTokenClient(core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN)
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN
+    )
     with pytest.raises(SystemTokenError):
         await client.get_token()
 
@@ -187,22 +203,85 @@ async def test_missing_provisioning_token_raises() -> None:
 async def test_missing_token_in_response_raises(patch_async_client) -> None:
     rec = _MintRecorder(token="")  # empty token
     patch_async_client(rec)
-    client = SystemTokenClient(core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN)
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN
+    )
     with pytest.raises(SystemTokenError):
         await client.get_token()
 
 
 @pytest.mark.asyncio
-async def test_provisioning_token_and_jwt_not_logged(patch_async_client, caplog) -> None:
+async def test_provisioning_token_and_jwt_not_logged(
+    patch_async_client, caplog
+) -> None:
     rec = _MintRecorder()
     patch_async_client(rec)
-    client = SystemTokenClient(core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN)
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN
+    )
     with caplog.at_level("INFO"):
         token = await client.get_token()
     for record in caplog.records:
         msg = record.getMessage()
         assert _PROV_TOKEN not in msg, "provisioning token leaked to logs"
         assert token not in msg, "system JWT leaked to logs"
+
+
+@pytest.mark.asyncio
+async def test_default_scope_sends_empty_mint_body(patch_async_client) -> None:
+    """With no scope the mint body is empty (Core defaults to ["system"])."""
+    import json as _json
+
+    rec = _MintRecorder()
+    patch_async_client(rec)
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN
+    )
+
+    await client.get_token()
+    body = _json.loads(rec.calls[0].content.decode() or "{}")
+    assert body == {}
+
+
+@pytest.mark.asyncio
+async def test_scope_is_sent_in_mint_body(patch_async_client) -> None:
+    """A requested scope is forwarded to Core as {"scope": [...]}.
+
+    This is the contract the Billing worker relies on to obtain a
+    billing_operator-scoped token.
+    """
+    import json as _json
+
+    rec = _MintRecorder()
+    patch_async_client(rec)
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN
+    )
+
+    header = await client.auth_header(scope=["billing_operator"])
+    assert header == {"Authorization": f"Bearer {_SYSTEM_JWT}"}
+    body = _json.loads(rec.calls[0].content.decode() or "{}")
+    assert body == {"scope": ["billing_operator"]}
+
+
+@pytest.mark.asyncio
+async def test_distinct_scopes_are_cached_separately(patch_async_client) -> None:
+    """Default and role-scoped tokens occupy distinct cache slots.
+
+    Requesting the default token then a billing_operator token must mint twice
+    (two distinct credentials), and re-requesting either serves from cache.
+    """
+    rec = _MintRecorder()
+    patch_async_client(rec)
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN
+    )
+
+    await client.get_token()  # default scope -> mint #1
+    await client.get_token(scope=["billing_operator"])  # billing scope -> mint #2
+    await client.get_token()  # default cached
+    await client.get_token(scope=["billing_operator"])  # billing cached
+    assert len(rec.calls) == 2
 
 
 def test_singleton_is_stable() -> None:
@@ -227,6 +306,8 @@ async def test_network_error_is_non_retryable(monkeypatch) -> None:
         orig_init(self, *a, transport=transport, **kw)
 
     monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
-    client = SystemTokenClient(core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN)
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN
+    )
     with pytest.raises(SystemTokenError):
         await client.get_token()
