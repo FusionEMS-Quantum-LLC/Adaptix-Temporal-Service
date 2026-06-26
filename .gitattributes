@@ -1,0 +1,5 @@
+# Shell scripts and the container entrypoint must keep LF line endings so they
+# run correctly inside the Linux worker image. A CRLF entrypoint.sh would break
+# the `#!/bin/sh` shebang at container start.
+*.sh text eol=lf
+backend/entrypoint.sh text eol=lf

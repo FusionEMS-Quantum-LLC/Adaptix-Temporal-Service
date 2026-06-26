@@ -26,4 +26,15 @@ fi
 
 echo "{\"level\":\"INFO\",\"message\":\"Starting Adaptix Temporal worker\",\"task_queue\":\"${TASK_QUEUE}\"}"
 
+# If the container was given an explicit command (e.g. the ECS task definition
+# sets command = ["python", "-m", "workers.onboarding_worker"]), run that exact
+# command after the env-validation gate above. Docker `command` / ECS
+# `command` override the image CMD; this wrapper is the ENTRYPOINT, so the
+# override arrives here as positional args. Falling back to the multiplexed
+# temporal_app.worker (which routes on TASK_QUEUE) preserves standalone runs
+# and any deployment that does not override the command.
+if [ "$#" -gt 0 ]; then
+    exec "$@"
+fi
+
 exec python -m temporal_app.worker
