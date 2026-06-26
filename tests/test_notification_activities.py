@@ -3,18 +3,22 @@
 What these tests prove:
   - send_sms_notification raises ValidationError for non-billing categories.
   - Allowed SMS categories are accepted.
-  - send_email_notification calls the correct endpoint.
+  - send_email_notification posts to the Communications /email/send route with
+    the SendEmailRequest{to:[],subject,body_html,body_text} body shape.
+  - send_sms_notification posts to the Communications /sms/send route with the
+    SendRequest{to_number,body} body shape.
   - list_agency_statement_recipients returns parsed recipient list.
   - 4xx responses produce non-retryable errors.
 
 What these tests do NOT prove:
   - Actual SES or Telnyx delivery.
-  - Runtime behavior against a live Core Service.
+  - Runtime behavior against a live Communications Service.
 """
 
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -29,6 +33,19 @@ def _make_response(status_code: int, body: dict | None = None) -> httpx.Response
         content=content,
         request=httpx.Request("POST", "https://test.internal/api"),
     )
+
+
+@contextmanager
+def _patch_auth():
+    """Patch the minted-system-JWT auth header so no mint network call runs."""
+    from temporal_app.activities import notification_activities
+
+    with patch.object(
+        notification_activities,
+        "_auth_header",
+        new=AsyncMock(return_value={"Authorization": "Bearer test-minted"}),
+    ):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -60,9 +77,12 @@ async def test_send_sms_billing_statement_reminder_allowed():
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    with patch(
-        "temporal_app.activities.notification_activities.httpx.AsyncClient"
-    ) as mock_cls:
+    with (
+        _patch_auth(),
+        patch(
+            "temporal_app.activities.notification_activities.httpx.AsyncClient"
+        ) as mock_cls,
+    ):
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):
@@ -73,6 +93,13 @@ async def test_send_sms_billing_statement_reminder_allowed():
             )
 
     assert result["message_sid"] == "SM123"
+    # Communications /sms/send contract: SendRequest{to_number, body}.
+    call = mock_client.post.call_args
+    assert call.args[0].endswith("/api/v1/communications/sms/send")
+    assert call.kwargs["json"] == {
+        "to_number": "+15555551234",
+        "body": "Your statement is ready",
+    }
 
 
 @pytest.mark.parametrize(
@@ -94,9 +121,12 @@ async def test_all_allowed_sms_categories_pass_validation(category):
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    with patch(
-        "temporal_app.activities.notification_activities.httpx.AsyncClient"
-    ) as mock_cls:
+    with (
+        _patch_auth(),
+        patch(
+            "temporal_app.activities.notification_activities.httpx.AsyncClient"
+        ) as mock_cls,
+    ):
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):
@@ -119,14 +149,17 @@ async def test_send_email_success():
     """send_email_notification posts to correct endpoint and returns delivery_id."""
     from temporal_app.activities import notification_activities
 
-    response_body = {"delivery_id": "del-789", "ses_message_id": "SES001"}
+    response_body = {"delivery_id": "del-789", "id": "del-789"}
     mock_response = _make_response(200, response_body)
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    with patch(
-        "temporal_app.activities.notification_activities.httpx.AsyncClient"
-    ) as mock_cls:
+    with (
+        _patch_auth(),
+        patch(
+            "temporal_app.activities.notification_activities.httpx.AsyncClient"
+        ) as mock_cls,
+    ):
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):
@@ -134,12 +167,18 @@ async def test_send_email_success():
                 to="admin@agency.example.com",
                 subject="Your billing statement",
                 template="billing_statement",
-                context={"statement_id": "stmt-001"},
+                context={"body_text": "Your statement is ready."},
             )
 
     assert result["delivery_id"] == "del-789"
-    call_kwargs = mock_client.post.call_args
-    assert call_kwargs.kwargs["json"]["template"] == "billing_statement"
+    # Communications /email/send contract: SendEmailRequest{to:[],subject,body_html,body_text}.
+    call = mock_client.post.call_args
+    assert call.args[0].endswith("/api/v1/communications/email/send")
+    sent = call.kwargs["json"]
+    assert sent["to"] == ["admin@agency.example.com"]
+    assert sent["subject"] == "Your billing statement"
+    assert sent["body_text"] == "Your statement is ready."
+    assert sent["body_html"] == "<p>Your statement is ready.</p>"
 
 
 @pytest.mark.asyncio
@@ -157,9 +196,12 @@ async def test_send_email_422_raises_value_error():
         )
     )
 
-    with patch(
-        "temporal_app.activities.notification_activities.httpx.AsyncClient"
-    ) as mock_cls:
+    with (
+        _patch_auth(),
+        patch(
+            "temporal_app.activities.notification_activities.httpx.AsyncClient"
+        ) as mock_cls,
+    ):
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):
@@ -195,9 +237,12 @@ async def test_list_recipients_returns_list():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_response)
 
-    with patch(
-        "temporal_app.activities.notification_activities.httpx.AsyncClient"
-    ) as mock_cls:
+    with (
+        _patch_auth(),
+        patch(
+            "temporal_app.activities.notification_activities.httpx.AsyncClient"
+        ) as mock_cls,
+    ):
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):
@@ -219,9 +264,12 @@ async def test_list_recipients_empty_on_no_recipients():
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=mock_response)
 
-    with patch(
-        "temporal_app.activities.notification_activities.httpx.AsyncClient"
-    ) as mock_cls:
+    with (
+        _patch_auth(),
+        patch(
+            "temporal_app.activities.notification_activities.httpx.AsyncClient"
+        ) as mock_cls,
+    ):
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
         with patch("temporalio.activity.heartbeat"):

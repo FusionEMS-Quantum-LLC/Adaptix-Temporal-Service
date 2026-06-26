@@ -1,8 +1,10 @@
 """Notification domain activities for Temporal workflows.
 
-Activities in this module call the Adaptix Core Service notification endpoints
-to send email (SES), SMS (Telnyx — billing AR only per platform policy), and
-batch statement delivery.
+Activities in this module send email and SMS via the Adaptix Communications
+Service (``/api/v1/communications/email/send`` and ``/sms/send``) and drive
+batch statement delivery via the Billing Service — all through the gateway
+(``ADAPTIX_API_BASE``), authenticated with a minted ``notifications``-scoped
+system JWT (no static service token).
 
 Platform policy enforced here:
   SMS (SendSMSActivity) is ONLY permitted for billing AR notifications
@@ -18,6 +20,7 @@ notification type, and result status are emitted.
 
 from __future__ import annotations
 
+import html
 import logging
 from typing import Any
 
@@ -26,11 +29,16 @@ from temporalio import activity
 
 from temporal_app.config import (
     ADAPTIX_API_BASE,
-    ADAPTIX_SERVICE_TOKEN,
     ACTIVITY_HTTP_TIMEOUT_S,
 )
+from temporal_app.system_token_client import get_system_token_client
 
 logger = logging.getLogger(__name__)
+
+# Role scope the Communications routes require. Core's minter maps the logical
+# "notifications" scope to the role(s) the Communications email/sms send routes
+# accept (see core_app.auth.system_identity._SCOPE_ROLE_MAP).
+_NOTIFICATIONS_SCOPE: list[str] = ["notifications"]
 
 # Allowed SMS notification categories per platform policy.
 # Any value not in this set raises a ValidationError (non-retryable).
@@ -44,14 +52,42 @@ _ALLOWED_SMS_CATEGORIES: frozenset[str] = frozenset(
 )
 
 
-def _auth_header() -> dict[str, str]:
-    token = ADAPTIX_SERVICE_TOKEN
-    if not token:
-        raise RuntimeError(
-            "ADAPTIX_SERVICE_TOKEN is not configured. "
-            "Fix the ECS task definition. This error is non-retryable."
-        )
-    return {"Authorization": f"Bearer {token}"}
+async def _auth_header() -> dict[str, str]:
+    """Return the Authorization header carrying a minted system JWT.
+
+    Mints (or reuses a cached) short-lived RS256 system JWT scoped to
+    ``notifications`` and returns it as a Bearer header for calls to the
+    Communications Service through ``ADAPTIX_API_BASE`` (the gateway). The
+    worker never holds the RS256 private key; it exchanges its
+    ``CORE_PROVISIONING_TOKEN`` for this short-lived token at the Core mint
+    route. Raises ``SystemTokenError`` (non-retryable) on a misconfigured
+    provisioning token or mint route.
+    """
+    return await get_system_token_client().auth_header(scope=_NOTIFICATIONS_SCOPE)
+
+
+def _context_body(context: dict[str, Any]) -> tuple[str, str]:
+    """Derive (body_html, body_text) from an activity-provided context.
+
+    The Communications ``/email/send`` route accepts pre-rendered
+    ``body_html`` / ``body_text`` rather than a template name. The worker does
+    NOT own a template catalog, so the body is taken from the context the
+    caller supplied:
+
+    * ``body_html`` / ``body_text`` keys are used directly when present.
+    * otherwise a single ``body`` / ``message`` value is used as plain text and
+      HTML-escaped into a minimal HTML body.
+
+    No content is fabricated — an empty context yields an empty body, which the
+    Communications route validates.
+    """
+    body_html = str(context.get("body_html") or "").strip()
+    body_text = str(
+        context.get("body_text") or context.get("body") or context.get("message") or ""
+    ).strip()
+    if not body_html and body_text:
+        body_html = f"<p>{html.escape(body_text)}</p>"
+    return body_html, body_text
 
 
 def _api_url(path: str) -> str:
@@ -73,7 +109,9 @@ def _raise_for_non_retryable(exc: httpx.HTTPStatusError) -> None:
     if status in (401, 403):
         raise PermissionError(
             f"AuthorizationError: Notification API returned {status}. "
-            "Check ADAPTIX_SERVICE_TOKEN."
+            "The minted system JWT was rejected — check that the system "
+            "principal seed row is ACTIVE and that the Core minter maps the "
+            "'notifications' scope to a role the Communications routes accept."
         ) from exc
     raise exc
 
@@ -90,19 +128,22 @@ async def send_email_notification(
     template: str,
     context: dict[str, Any],
 ) -> dict[str, Any]:
-    """Send a transactional email via SES through the Core Service.
+    """Send a transactional email through the Communications Service.
 
-    Calls: POST /api/v1/notifications/email/send
+    Calls: POST /api/v1/communications/email/send (through the gateway).
+    Body: SendEmailRequest{to: [<addr>], subject, body_html, body_text}.
 
-    to:       Recipient email address. Not logged (PHI-safe).
+    to:       Recipient email address. Not logged (PHI-safe). Wrapped into the
+              Communications route's ``to`` list.
     subject:  Email subject line.
-    template: Jinja2 template name registered in the Core Service
-              (e.g. "billing_statement", "onboarding_welcome").
-    context:  Template rendering context. Must not include raw PHI values —
-              use pseudonymous identifiers and let the template service
-              resolve patient-facing display values from the DB.
+    template: Retained for backward compatibility with existing workflow
+              callers. The Communications route renders no templates; the body
+              is taken from ``context`` (body_html / body_text / body / message).
+              The worker does not own a template catalog.
+    context:  Rendering context. ``body_html`` / ``body_text`` / ``body`` /
+              ``message`` supply the email body. Must not include raw PHI.
 
-    Returns the delivery record ID and SES message ID on success.
+    Returns the Communications delivery record on success.
     """
     activity.heartbeat("sending_email")
     logger.info(
@@ -110,17 +151,18 @@ async def send_email_notification(
         template,
     )
 
+    body_html, body_text = _context_body(context)
     async with httpx.AsyncClient(timeout=ACTIVITY_HTTP_TIMEOUT_S) as client:
         try:
             resp = await client.post(
-                _api_url("/api/v1/notifications/email/send"),
+                _api_url("/api/v1/communications/email/send"),
                 json={
-                    "to": to,
+                    "to": [to],
                     "subject": subject,
-                    "template": template,
-                    "context": context,
+                    "body_html": body_html,
+                    "body_text": body_text,
                 },
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -135,7 +177,7 @@ async def send_email_notification(
     logger.info(
         "notification_activity.send_email template=%s delivery_id=%s",
         template,
-        result.get("delivery_id"),
+        result.get("delivery_id") or result.get("id"),
     )
     return result
 
@@ -163,7 +205,8 @@ async def send_sms_notification(
     Passing any other category raises a ValidationError immediately without
     making any HTTP call. This is a non-retryable activity error.
 
-    Calls: POST /api/v1/notifications/sms/send
+    Calls: POST /api/v1/communications/sms/send (through the gateway).
+    Body: SendRequest{to_number, body}.
 
     PHI-safe: recipient phone number is not logged.
     """
@@ -184,13 +227,12 @@ async def send_sms_notification(
     async with httpx.AsyncClient(timeout=ACTIVITY_HTTP_TIMEOUT_S) as client:
         try:
             resp = await client.post(
-                _api_url("/api/v1/notifications/sms/send"),
+                _api_url("/api/v1/communications/sms/send"),
                 json={
-                    "to": to,
-                    "message": message,
-                    "notification_category": notification_category,
+                    "to_number": to,
+                    "body": message,
                 },
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -205,7 +247,7 @@ async def send_sms_notification(
     logger.info(
         "notification_activity.send_sms category=%s message_sid=%s",
         notification_category,
-        result.get("message_sid"),
+        result.get("message_sid") or result.get("id"),
     )
     return result
 
@@ -246,7 +288,7 @@ async def list_agency_statement_recipients(
             resp = await client.get(
                 _api_url("/api/v1/billing/statements/recipients"),
                 params={"agency_id": agency_id, "month": month},
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -290,7 +332,7 @@ async def send_statement_email(statement_id: str, to: str) -> dict[str, Any]:
             resp = await client.post(
                 _api_url(f"/api/v1/billing/statements/{statement_id}/send-email"),
                 json={"to": to},
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -327,7 +369,7 @@ async def queue_statement_for_mail(statement_id: str) -> dict[str, Any]:
         try:
             resp = await client.post(
                 _api_url(f"/api/v1/billing/statements/{statement_id}/send-mail"),
-                headers=_auth_header(),
+                headers=await _auth_header(),
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:

@@ -87,11 +87,10 @@ from temporal_app.activities.document_activities import (
     send_statement_via_postgrid,
 )
 from temporal_app.activities.onboarding_activities import (
-    advance_onboarding_step,
     complete_onboarding_step,
     configure_billing_provider_identity,
     get_onboarding_case,
-    provision_tenant,
+    provision_case,
     run_go_live_readiness_check,
     send_go_live_notification,
     unlock_workspace,
@@ -194,9 +193,8 @@ def _build_worker(client: Client, task_queue: str) -> Worker:
             ],
             activities=[
                 get_onboarding_case,
-                advance_onboarding_step,
                 complete_onboarding_step,
-                provision_tenant,
+                provision_case,
                 run_go_live_readiness_check,
                 unlock_workspace,
                 configure_billing_provider_identity,
