@@ -6,5 +6,5 @@
 # if future activity implementations need direct AWS SDK calls.
 temporalio>=1.29.0,<2.0.0
 httpx>=0.28.1,<1.0.0
-boto3>=1.43.35,<2.0.0
+boto3>=1.43.37,<2.0.0
 botocore>=1.43.37,<2.0.0
