@@ -1,0 +1,36 @@
+name: Codacy Coverage
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio pytest-cov pytest-xdist aiosqlite httpx
+          pip install -e backend || true
+          pip install -e "backend[test]" || true
+          pip install -e "backend[dev]" || true
+          for f in $(find . -maxdepth 3 -name "requirements*.txt" -not -path "*/node_modules/*" -not -path "*/.git/*"); do pip install -r "$f" || true; done
+      - name: Run tests with coverage
+        working-directory: backend
+        continue-on-error: true
+        run: python -m pytest --cov=temporal_app --cov-report=xml:coverage.xml -q
+      - name: Normalize coverage paths
+        working-directory: backend
+        run: |
+          if [ -f coverage.xml ]; then sed -i 's#filename="temporal_app/#filename="backend/temporal_app/#g' coverage.xml; else echo "no coverage.xml"; exit 1; fi
+      - name: Upload coverage to Codacy
+        uses: codacy/codacy-coverage-reporter-action@v1
+        with:
+          project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
+          coverage-reports: backend/coverage.xml
