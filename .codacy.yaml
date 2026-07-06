@@ -1,0 +1,47 @@
+# Codacy repository configuration — Adaptix Python service
+#
+# Scopes Codacy analysis to actual shipped product source. Every path excluded
+# below is non-product tooling, test code, or generated/vendored output — NOT a
+# customer-facing runtime path — so excluding it removes false-signal findings
+# without hiding any real defect in production code.
+#
+# Deliberately NOT excluded: app/ src/ the service package (the real product).
+# Findings there are addressed by real code fixes and by Codacy pattern
+# configuration, never by exclusion. This file must never be used to silence a
+# genuine product-code defect.
+---
+exclude_paths:
+  # ── Test & fixture code — asserted behaviour, not a runtime attack surface.
+  - 'tests/**'
+  - 'test/**'
+  - '**/tests/**'
+  - '**/test_*.py'
+  - '**/*_test.py'
+  - 'conftest.py'
+  - '**/conftest.py'
+
+  # ── Build / ops / CI tooling — not shipped to users.
+  - 'scripts/**'
+  - '.github/scripts/**'
+  - 'docs/**'
+
+  # ── Auto-generated DB migration revisions (alembic). Product schema lives in
+  #    models/; the generated version files are noisy and rarely actionable.
+  - '**/alembic/versions/**'
+  - '**/migrations/versions/**'
+
+  # ── Virtualenvs / caches / build output / packaging metadata — vendored.
+  - '.venv/**'
+  - 'venv/**'
+  - '**/__pycache__/**'
+  - 'build/**'
+  - 'dist/**'
+  - '**/*.egg-info/**'
+  - '.pytest_cache/**'
+  - '.mypy_cache/**'
+  - '.ruff_cache/**'
+
+  # ── Stale worktrees / agent scratch.
+  - '_wt-*/**'
+  - '_wt_*/**'
+  - '.claude/**'
