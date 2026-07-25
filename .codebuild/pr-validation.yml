@@ -20,7 +20,8 @@ phases:
     commands:
       - python --version
       - pip install --quiet --upgrade pip
-      - pip install --quiet ruff mypy pytest pytest-asyncio pytest-cov pytest-xdist aiosqlite httpx
+      # pinned: ruff 0.16 broadened default rules and broke the gate platform-wide
+      - pip install --quiet 'ruff>=0.15,<0.16' mypy pytest pytest-asyncio pytest-cov pytest-xdist aiosqlite httpx
       - |
         for BD in core/backend backend .; do
           if [ -f "$BD/pyproject.toml" ]; then
