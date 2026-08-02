@@ -60,12 +60,12 @@ def _api_url(path: str) -> str:
 def _raise_for_non_retryable(exc: httpx.HTTPStatusError) -> None:
     status = exc.response.status_code
     if status in (400, 422):
-        raise ValueError(
+        raise ValidationError(
             f"ValidationError: Documents API returned {status}. "
             f"Response: {exc.response.text[:500]}"
         ) from exc
     if status in (401, 403):
-        raise PermissionError(
+        raise AuthorizationError(
             f"AuthorizationError: Documents API returned {status}. "
             "Check ADAPTIX_SERVICE_TOKEN."
         ) from exc

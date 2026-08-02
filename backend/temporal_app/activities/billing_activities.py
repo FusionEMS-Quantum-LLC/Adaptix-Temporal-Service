@@ -41,6 +41,7 @@ from temporal_app.config import (
     ADAPTIX_API_BASE,
     ACTIVITY_HTTP_TIMEOUT_S,
 )
+from temporal_app.exceptions import AuthorizationError, ValidationError
 from temporal_app.system_token_client import get_system_token_client
 
 logger = logging.getLogger(__name__)
@@ -90,12 +91,12 @@ def _raise_for_non_retryable(exc: httpx.HTTPStatusError) -> None:
     """
     status = exc.response.status_code
     if status == 400 or status == 422:
-        raise ValueError(
+        raise ValidationError(
             f"ValidationError: Billing API rejected the request with {status}. "
             f"Response: {exc.response.text[:500]}"
         ) from exc
     if status in (401, 403):
-        raise PermissionError(
+        raise AuthorizationError(
             f"AuthorizationError: Billing API returned {status}. "
             "The minted system JWT was rejected — check that the system "
             "principal seed row is ACTIVE and carries the billing_operator "
