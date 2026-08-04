@@ -6,7 +6,8 @@ is idempotent: re-running with the same workflow ID is safe.
 
 Workflows registered here:
   - ClaimSubmissionWorkflow       — submit a single claim to Office Ally
-  - DenialResubmissionWorkflow    — create appeal + resubmit a denied claim
+  - DenialResubmissionWorkflow    — appeal + resubmit a denied claim, ONLY
+                                    after a named human approves
   - ERAPostingWorkflow            — process an 835 ERA remittance file
   - MonthlyAgencyInvoicingWorkflow — generate and send all monthly invoices
 
@@ -18,6 +19,7 @@ display values from the database when the activity executes.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from typing import Any
 
@@ -39,6 +41,13 @@ with workflow.unsafe.imports_passed_through():
 
 _ACTIVITY_TIMEOUT = timedelta(minutes=5)
 _LONG_ACTIVITY_TIMEOUT = timedelta(minutes=30)
+
+# How long a prepared appeal waits for a human before the workflow gives up.
+# Long, because a denial appeal is queued work for one biller, not an
+# interactive prompt — but FINITE, so a forgotten appeal ends as an explicit
+# "expired" record instead of a workflow that lives forever holding a decision
+# nobody knows is outstanding. Expiry files nothing. See the class docstring.
+_APPROVAL_TIMEOUT = timedelta(days=14)
 
 
 @workflow.defn
@@ -80,7 +89,7 @@ class ClaimSubmissionWorkflow:
 
 @workflow.defn
 class DenialResubmissionWorkflow:
-    """Create a denial appeal and resubmit a denied claim.
+    """Appeal a denied claim and resubmit it — only after a human approves.
 
     Workflow ID convention: "claim-denial-{claim_id}-{denial_code}"
     Task queue: billing
@@ -91,12 +100,79 @@ class DenialResubmissionWorkflow:
 
     Steps:
         1. Fetch current claim status to confirm it is in denied state.
-        2. Create a denial appeal record in the Billing Service.
-        3. Resubmit the claim to the clearinghouse.
+        2. BLOCK until a named human approves or rejects.
+        3. On approval only: create the denial appeal record.
+        4. On approval only: resubmit the claim to the clearinghouse.
 
     Result:
-        dict: Resubmission response from step 3.
+        dict: always carries ``outcome`` — one of "resubmitted", "rejected"
+        or "expired" — plus ``appeal_filed`` and ``resubmitted`` booleans so a
+        caller can never mistake a refusal for a submission.
+
+    WHY THE HUMAN GATE EXISTS — read before changing anything here
+    --------------------------------------------------------------
+    Filing an appeal and resubmitting a claim are protected money actions.
+    An appeal is a formal assertion to a payer, and a resubmission can
+    duplicate a claim that is still adjudicating — which reads as duplicate
+    billing. Neither may be taken autonomously, no matter how confident an
+    upstream denial classifier is. Software prepares the work; a person
+    decides to send it.
+
+    THE GATE FAILS CLOSED. Silence is not consent:
+      - no decision within the window  -> outcome "expired", nothing filed
+      - an explicit reject             -> outcome "rejected", nothing filed
+    Only an explicit approval reaches steps 3 and 4, and the approver's user
+    id is carried into the result so the audit trail names a person.
+
+    Steps 3 and 4 are deliberately ordered and NOT independently retryable as
+    a pair: the appeal record is written first so that, if resubmission fails
+    after its own retries, the appeal still exists and the claim is visibly
+    mid-appeal rather than silently untouched.
     """
+
+    def __init__(self) -> None:
+        self._decision: dict[str, Any] | None = None
+
+    @workflow.signal
+    def submit_decision(
+        self, approved: bool, actor_user_id: str, reason: str = ""
+    ) -> None:
+        """Record a named human's decision on this appeal.
+
+        FIRST DECISION WINS. A later signal cannot overturn one already
+        recorded: by the time a second arrives the first may already have
+        filed an appeal with the payer, and this workflow cannot unsend that.
+        Reversing a filed appeal is a new, separately-approved action.
+        """
+        if self._decision is not None:
+            workflow.logger.info(
+                "DenialResubmissionWorkflow ignoring late decision "
+                "already_decided_by=%s late_actor=%s",
+                self._decision.get("actor_user_id"),
+                actor_user_id,
+            )
+            return
+        self._decision = {
+            "approved": approved,
+            "actor_user_id": actor_user_id,
+            "reason": reason,
+        }
+        workflow.logger.info(
+            "DenialResubmissionWorkflow decision recorded approved=%s actor=%s",
+            approved,
+            actor_user_id,
+        )
+
+    @workflow.query
+    def pending_decision(self) -> dict[str, Any]:
+        """Expose gate state so an operator surface can list what awaits a human."""
+        if self._decision is None:
+            return {"awaiting_human": True, "approved": None, "actor_user_id": None}
+        return {
+            "awaiting_human": False,
+            "approved": self._decision["approved"],
+            "actor_user_id": self._decision["actor_user_id"],
+        }
 
     @workflow.run
     async def run(self, claim_id: str, denial_code: str) -> dict[str, Any]:
@@ -119,7 +195,33 @@ class DenialResubmissionWorkflow:
             claim_status.get("status"),
         )
 
-        # Step 2: create appeal
+        # Step 2: block until a human decides. Nothing below this line runs
+        # without an explicit approval.
+        try:
+            await workflow.wait_condition(
+                lambda: self._decision is not None,
+                timeout=_APPROVAL_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            workflow.logger.warning(
+                "DenialResubmissionWorkflow expired unapproved claim_id=%s "
+                "denial_code=%s — no appeal filed, no resubmission",
+                claim_id,
+                denial_code,
+            )
+            return self._outcome("expired", claim_id, denial_code)
+
+        decision = self._decision or {}
+        if not decision.get("approved"):
+            workflow.logger.info(
+                "DenialResubmissionWorkflow rejected claim_id=%s by=%s — "
+                "no appeal filed, no resubmission",
+                claim_id,
+                decision.get("actor_user_id"),
+            )
+            return self._outcome("rejected", claim_id, denial_code, decision)
+
+        # Step 3: create appeal (approved)
         await workflow.execute_activity(
             create_denial_appeal,
             args=[claim_id, denial_code],
@@ -127,7 +229,7 @@ class DenialResubmissionWorkflow:
             retry_policy=DEFAULT_RETRY_POLICY,
         )
 
-        # Step 3: resubmit
+        # Step 4: resubmit (approved)
         result: dict[str, Any] = await workflow.execute_activity(
             resubmit_denied_claim,
             claim_id,
@@ -136,11 +238,36 @@ class DenialResubmissionWorkflow:
         )
 
         workflow.logger.info(
-            "DenialResubmissionWorkflow complete claim_id=%s resubmission_id=%s",
+            "DenialResubmissionWorkflow complete claim_id=%s resubmission_id=%s "
+            "approved_by=%s",
             claim_id,
             result.get("submission_id"),
+            decision.get("actor_user_id"),
         )
-        return result
+        outcome = self._outcome("resubmitted", claim_id, denial_code, decision)
+        outcome["appeal_filed"] = True
+        outcome["resubmitted"] = True
+        outcome["submission"] = result
+        return outcome
+
+    @staticmethod
+    def _outcome(
+        outcome: str,
+        claim_id: str,
+        denial_code: str,
+        decision: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build a result that states plainly whether money actions were taken."""
+        decision = decision or {}
+        return {
+            "outcome": outcome,
+            "claim_id": claim_id,
+            "denial_code": denial_code,
+            "appeal_filed": False,
+            "resubmitted": False,
+            "decided_by": decision.get("actor_user_id"),
+            "reason": decision.get("reason", ""),
+        }
 
 
 @workflow.defn
