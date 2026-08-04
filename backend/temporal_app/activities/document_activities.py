@@ -25,6 +25,7 @@ from temporal_app.config import (
     ADAPTIX_API_BASE,
     ACTIVITY_HTTP_TIMEOUT_S,
 )
+from temporal_app.exceptions import AuthorizationError, ValidationError
 from temporal_app.system_token_client import get_system_token_client
 
 logger = logging.getLogger(__name__)
