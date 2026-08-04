@@ -8,6 +8,11 @@ permissions:
 jobs:
   coverage:
     runs-on: ubuntu-latest
+    # Mapped to `env` so the step-level `if:` below can read it: the `secrets`
+    # context is NOT available in a step-level `if:`, so `if: secrets.X != ''`
+    # would evaluate false on EVERY run and skip the upload on main too.
+    env:
+      CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,7 +35,17 @@ jobs:
         run: |
           if [ -f coverage.xml ]; then sed -i 's#filename="temporal_app/#filename="backend/temporal_app/#g' coverage.xml; else echo "no coverage.xml"; exit 1; fi
       - name: Upload coverage to Codacy
+        if: env.CODACY_PROJECT_TOKEN != ''
         uses: codacy/codacy-coverage-reporter-action@v1
         with:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
           coverage-reports: backend/coverage.xml
+
+      # Never skip silently: a repo whose token was revoked must not look
+      # identical to a healthy one.
+      - name: Report skipped coverage upload
+        if: env.CODACY_PROJECT_TOKEN == ''
+        run: |
+          echo "Codacy upload SKIPPED: CODACY_PROJECT_TOKEN is not available to this run."
+          echo "Expected for Dependabot and fork pull requests, which cannot read repository Actions secrets."
+          echo "Tests ran and the coverage report was produced; coverage uploads on the post-merge push run."
