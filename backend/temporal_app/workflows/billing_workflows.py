@@ -143,11 +143,17 @@ class DenialResubmissionWorkflow:
         recorded: by the time a second arrives the first may already have
         filed an appeal with the payer, and this workflow cannot unsend that.
         Reversing a filed appeal is a new, separately-approved action.
+
+        Not logged on the happy path on purpose: Temporal records every signal
+        it receives in workflow history permanently, which is stronger evidence
+        than a log line, and run() logs the outcome with the approver's id. A
+        late decision IS logged, because that one is a human surprise worth
+        surfacing — someone believed they were deciding and were not.
         """
         if self._decision is not None:
             workflow.logger.info(
-                "DenialResubmissionWorkflow ignoring late decision "
-                "already_decided_by=%s late_actor=%s",
+                "DenialResubmissionWorkflow ignoring late decision: decided by "
+                "%s, late actor %s",
                 self._decision.get("actor_user_id"),
                 actor_user_id,
             )
@@ -157,11 +163,6 @@ class DenialResubmissionWorkflow:
             "actor_user_id": actor_user_id,
             "reason": reason,
         }
-        workflow.logger.info(
-            "DenialResubmissionWorkflow decision recorded approved=%s actor=%s",
-            approved,
-            actor_user_id,
-        )
 
     @workflow.query
     def pending_decision(self) -> dict[str, Any]:
