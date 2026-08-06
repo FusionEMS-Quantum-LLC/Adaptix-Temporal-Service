@@ -1,0 +1,38 @@
+{
+  "tools": {
+    "sandbox": "docker",
+    "sandboxNetworkAccess": false,
+    "useRipgrep": true,
+    "shell": {
+      "enableInteractiveShell": true,
+      "backgroundCompletionBehavior": "notify"
+    }
+  },
+  "security": {
+    "toolSandboxing": true,
+    "disableYoloMode": true,
+    "disableAlwaysAllow": true,
+    "enablePermanentToolApproval": false,
+    "autoAddToPolicyByDefault": false,
+    "blockGitExtensions": true
+  },
+  "mcp": {
+    "allowed": [
+      "github",
+      "playwright",
+      "figma",
+      "aws-readonly",
+      "postgres-readonly",
+      "redis-readonly",
+      "stedi-sandbox",
+      "android-emulator"
+    ],
+    "excluded": [
+      "public-package-search",
+      "untrusted-shell",
+      "production-database-write",
+      "production-stedi-submit",
+      "production-aws-mutate"
+    ]
+  }
+}
