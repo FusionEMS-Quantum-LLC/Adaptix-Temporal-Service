@@ -206,6 +206,7 @@
       "reportlab",
       "requests",
       "slowapi",
+      "sqlalchemy",
       "stripe",
       "temporalio",
       "uvicorn",
