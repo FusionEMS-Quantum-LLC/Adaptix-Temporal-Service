@@ -102,6 +102,6 @@ phases:
 
 cache:
   paths:
-    - "/root/.cache/pip/**/*"
+    - "/root/.cache/uv/**/*"
     - ".mypy_cache/**/*"
     - ".ruff_cache/**/*"
