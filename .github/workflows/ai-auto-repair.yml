@@ -1,0 +1,60 @@
+﻿name: AI Auto Repair
+on:
+  workflow_run:
+    workflows: ["*"]
+    types:
+      - completed
+jobs:
+  repair:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Trigger AI Repair
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_ID="${{ github.event.workflow_run.id }}"
+          REPO="${{ github.repository }}"
+          WORKFLOW_NAME="${{ github.event.workflow_run.name }}"
+          HEAD_BRANCH="${{ github.event.workflow_run.head_branch }}"
+          
+          # Check if issue exists
+          existing=$(gh issue list --repo "$REPO" --search "\"$RUN_ID\" in:body" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)
+          if [[ -n "$existing" ]]; then
+            echo "Repair issue already exists: $existing"
+            exit 0
+          fi
+          
+          log_excerpt="$(gh run view "$RUN_ID" --repo "$REPO" --log-failed 2>/dev/null | tail -n 150 || echo 'No logs available')"
+          
+          cat <<EOF > body.md
+          ## AI Repair Required
+          
+          Workflow failed: $WORKFLOW_NAME
+          Branch: $HEAD_BRANCH
+          Run ID: $RUN_ID
+          
+          ### Failed log excerpt
+          \\\
+          $log_excerpt
+          \\\
+          
+          Required result:
+          - Inspect the failed workflow logs
+          - Fix the issue in a new branch and open a PR
+          - Do not bypass validation; do not push directly to main
+          EOF
+          
+          # Ensure labels exist
+          gh api --method POST "repos/$REPO/labels" -f name="ai-repair" -f color="5319e7" -f description="Failures that should be fixed by the automated repair loop" >/dev/null 2>&1 || true
+          gh api --method POST "repos/$REPO/labels" -f name="automation" -f color="1d76db" -f description="Raised by repository automation" >/dev/null 2>&1 || true
+          gh api --method POST "repos/$REPO/labels" -f name="blocking" -f color="d93f0b" -f description="Blocking failure requiring repair" >/dev/null 2>&1 || true
+
+          gh issue create --repo "$REPO" \
+            --title "AI Repair Required: $WORKFLOW_NAME failed on $HEAD_BRANCH" \
+            --label ai-repair,automation,blocking \
+            --body-file body.md
