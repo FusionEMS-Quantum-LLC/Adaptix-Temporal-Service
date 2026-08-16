@@ -1,7 +1,7 @@
-"""Adaptix Temporal notifications worker entrypoint.
+"""Adaptix Temporal migration CONTROL-PLANE worker entrypoint.
 
 ECS task CMD override:
-    python -m workers.notifications_worker
+    python -m workers.migration_worker
 
 Environment variables required:
     TEMPORAL_HOST         — Temporal server host:port
@@ -11,22 +11,32 @@ Environment variables required:
                             Manager via the ECS task definition). Required:
                             the worker refuses to start without it so no
                             plaintext payload can reach workflow history.
-    TASK_QUEUE            — Must be "notifications" (validated at startup)
+                            Migration payloads are the highest-PHI data on the
+                            platform, so this matters most here.
+    TASK_QUEUE            — Must be "migration" (validated at startup)
     ADAPTIX_API_BASE      — Internal API base URL
     ADAPTIX_SERVICE_TOKEN — Bearer token for inter-service authentication
 
 This worker registers:
   Workflows:
-    - SendBatchStatementsWorkflow
+    - MigrationWorkflow
   Activities:
-    - send_email_notification
-    - send_sms_notification
-    - list_agency_statement_recipients
-    - send_statement_email
-    - queue_statement_for_mail
+    - profile_source_dataset
+    - build_field_mapping
+    - run_migration_dry_run
+    - reconcile_migration
+    - promote_migration_cutover
+    - rollback_migration
 
-Platform policy enforced: SMS activities are only permitted for billing AR
-notification categories. The activity itself enforces the allowlist.
+It deliberately does NOT register backfill_migration_history. That activity is
+bulk work and belongs to the separate `migration-bulk` queue
+(workers/migration_bulk_worker.py), so a multi-million-record backfill can never
+occupy the slots a cutover approval or a live billing workflow needs.
+
+The activities above currently raise a non-retryable
+MigrationActivityNotImplemented — the Adaptix Imports service that performs the
+work is not built yet. This worker is real and will run; the first step a
+migration schedules fails loudly until Imports ships.
 """
 
 from __future__ import annotations
@@ -37,24 +47,26 @@ import sys
 
 from temporalio.worker import Worker
 
-from temporal_app.activities.notification_activities import (
-    list_agency_statement_recipients,
-    queue_statement_for_mail,
-    send_email_notification,
-    send_sms_notification,
-    send_statement_email,
+from temporal_app.activities.migration_activities import (
+    build_field_mapping,
+    profile_source_dataset,
+    promote_migration_cutover,
+    reconcile_migration,
+    rollback_migration,
+    run_migration_dry_run,
 )
 from temporal_app.client import connect_temporal_client
 from temporal_app.config import (
+    MIGRATION_TASK_QUEUE,
     TEMPORAL_HOST,
     TEMPORAL_NAMESPACE,
     WORKER_MAX_CONCURRENT_ACTIVITY_TASKS,
     WORKER_MAX_CONCURRENT_WORKFLOW_TASKS,
     validate_config,
 )
-from temporal_app.workflows.notification_workflows import SendBatchStatementsWorkflow
+from temporal_app.workflows.migration import MigrationWorkflow
 
-TASK_QUEUE = "notifications"
+TASK_QUEUE = MIGRATION_TASK_QUEUE
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,7 +77,7 @@ logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
-    """Start the notifications Temporal worker and block until shutdown signal."""
+    """Start the migration control-plane worker and block until shutdown."""
     errors = validate_config()
     if errors:
         for err in errors:
@@ -73,7 +85,7 @@ async def main() -> None:
         sys.exit(1)
 
     logger.info(
-        "notifications_worker.starting host=%s namespace=%s task_queue=%s",
+        "migration_worker.starting host=%s namespace=%s task_queue=%s",
         TEMPORAL_HOST,
         TEMPORAL_NAMESPACE,
         TASK_QUEUE,
@@ -87,20 +99,21 @@ async def main() -> None:
         client,
         task_queue=TASK_QUEUE,
         workflows=[
-            SendBatchStatementsWorkflow,
+            MigrationWorkflow,
         ],
         activities=[
-            send_email_notification,
-            send_sms_notification,
-            list_agency_statement_recipients,
-            send_statement_email,
-            queue_statement_for_mail,
+            profile_source_dataset,
+            build_field_mapping,
+            run_migration_dry_run,
+            reconcile_migration,
+            promote_migration_cutover,
+            rollback_migration,
         ],
         max_concurrent_workflow_tasks=WORKER_MAX_CONCURRENT_WORKFLOW_TASKS,
         max_concurrent_activities=WORKER_MAX_CONCURRENT_ACTIVITY_TASKS,
     )
 
-    logger.info("notifications_worker.running task_queue=%s", TASK_QUEUE)
+    logger.info("migration_worker.running task_queue=%s", TASK_QUEUE)
     await worker.run()
 
 

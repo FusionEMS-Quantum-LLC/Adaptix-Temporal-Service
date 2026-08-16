@@ -142,6 +142,45 @@ def test_agency_onboarding_workflow_is_defined():
 
 
 # ---------------------------------------------------------------------------
+# Migration workflow structure
+# ---------------------------------------------------------------------------
+
+
+def test_migration_workflow_is_defined():
+    """MigrationWorkflow has a run(tenant_id, migration_id, carried_state) signature."""
+    from temporal_app.workflows.migration import MigrationWorkflow
+
+    sig = inspect.signature(MigrationWorkflow.run)
+    params = list(sig.parameters.keys())
+    assert "tenant_id" in params
+    assert "migration_id" in params
+    # carried_state is the continue-as-new hand-over and must be optional so a
+    # fresh migration starts without one.
+    assert "carried_state" in params
+    assert sig.parameters["carried_state"].default is None
+
+
+def test_migration_workflow_declares_every_contract_signal_and_query():
+    """The six signals and the status query are registered with Temporal."""
+    from temporal_app.workflows.migration import MigrationWorkflow
+
+    definition = MigrationWorkflow.__temporal_workflow_definition
+    signals = definition.signals
+    queries = definition.queries
+
+    assert definition.name == "MigrationWorkflow"
+    assert set(signals) == {
+        "pause",
+        "resume",
+        "approve_cutover",
+        "reject_cutover",
+        "request_rollback",
+        "submit_mapping_decision",
+    }
+    assert "status" in queries
+
+
+# ---------------------------------------------------------------------------
 # Worker build function
 # ---------------------------------------------------------------------------
 
@@ -181,3 +220,65 @@ def test_build_worker_billing_queue_returns_worker(monkeypatch):
     assert call_kwargs.kwargs.get("task_queue") == "billing" or (
         len(call_kwargs.args) >= 2 and call_kwargs.args[1] == "billing"
     )
+
+
+def _build_worker_kwargs(task_queue: str) -> dict:
+    """Build a worker for ``task_queue`` and return the Worker constructor kwargs."""
+    from unittest.mock import MagicMock, patch
+
+    with patch("temporal_app.worker.Worker", return_value=MagicMock()) as worker_cls:
+        from temporal_app.worker import _build_worker
+
+        _build_worker(MagicMock(), task_queue)
+
+    return worker_cls.call_args.kwargs
+
+
+def test_build_worker_registers_the_migration_control_plane():
+    """The migration queue runs the workflow plus its control-plane activities."""
+    kwargs = _build_worker_kwargs("migration")
+
+    assert kwargs["task_queue"] == "migration"
+    assert [w.__name__ for w in kwargs["workflows"]] == ["MigrationWorkflow"]
+    assert sorted(a.__name__ for a in kwargs["activities"]) == [
+        "build_field_mapping",
+        "profile_source_dataset",
+        "promote_migration_cutover",
+        "reconcile_migration",
+        "rollback_migration",
+        "run_migration_dry_run",
+    ]
+
+
+def test_build_worker_migration_control_plane_excludes_bulk_backfill():
+    """Bulk backfill must not run on the control-plane worker."""
+    kwargs = _build_worker_kwargs("migration")
+
+    assert "backfill_migration_history" not in [
+        a.__name__ for a in kwargs["activities"]
+    ]
+
+
+def test_build_worker_registers_the_migration_bulk_plane():
+    """The bulk queue runs only the backfill activity, and no workflows."""
+    kwargs = _build_worker_kwargs("migration-bulk")
+
+    assert kwargs["task_queue"] == "migration-bulk"
+    assert kwargs["workflows"] == []
+    assert [a.__name__ for a in kwargs["activities"]] == ["backfill_migration_history"]
+
+
+def test_migration_activities_do_not_leak_into_revenue_workers():
+    """Adding migration queues did not change what the billing worker runs."""
+    kwargs = _build_worker_kwargs("billing")
+
+    names = {a.__name__ for a in kwargs["activities"]}
+    assert names == {
+        "submit_claim_to_clearinghouse",
+        "get_claim_status",
+        "create_denial_appeal",
+        "resubmit_denied_claim",
+        "process_era_file",
+        "run_monthly_agency_invoicing",
+    }
+    assert not any(name.startswith("migration") for name in names)

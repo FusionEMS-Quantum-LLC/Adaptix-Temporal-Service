@@ -6,6 +6,11 @@ ECS task CMD override:
 Environment variables required:
     TEMPORAL_HOST         — Temporal server host:port
     TEMPORAL_NAMESPACE    — Defaults to "adaptix"
+    TEMPORAL_PAYLOAD_CODEC_KEY
+                          — AES-256 payload encryption keyring (AWS Secrets
+                            Manager via the ECS task definition). Required:
+                            the worker refuses to start without it so no
+                            plaintext payload can reach workflow history.
     TASK_QUEUE            — Must be "onboarding" (validated at startup)
     ADAPTIX_API_BASE      — Internal API base URL
     ADAPTIX_SERVICE_TOKEN — Bearer token for inter-service authentication
@@ -29,7 +34,6 @@ import asyncio
 import logging
 import sys
 
-from temporalio.client import Client
 from temporalio.worker import Worker
 
 from temporal_app.activities.onboarding_activities import (
@@ -41,6 +45,7 @@ from temporal_app.activities.onboarding_activities import (
     send_go_live_notification,
     unlock_workspace,
 )
+from temporal_app.client import connect_temporal_client
 from temporal_app.config import (
     TEMPORAL_HOST,
     TEMPORAL_NAMESPACE,
@@ -75,10 +80,9 @@ async def main() -> None:
         TASK_QUEUE,
     )
 
-    client = await Client.connect(
-        TEMPORAL_HOST,
-        namespace=TEMPORAL_NAMESPACE,
-    )
+    # Connects through the shared helper so the encrypting payload codec is
+    # applied. Raises before connecting when no payload key is configured.
+    client = await connect_temporal_client()
 
     worker = Worker(
         client,

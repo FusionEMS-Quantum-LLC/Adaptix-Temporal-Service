@@ -12,6 +12,10 @@ dependencies = [
     "httpx>=0.28.1,<1.0.0",
     "boto3>=1.34.0,<2.0.0",
     "botocore>=1.34.0,<2.0.0",
+    # AES-256-GCM for temporal_app/codec.py — the payload encryption that keeps
+    # PHI out of Temporal workflow history. Runtime dependency; the worker
+    # refuses to start without it.
+    "cryptography>=50.0.0,<51.0.0",
 ]
 
 [project.optional-dependencies]
