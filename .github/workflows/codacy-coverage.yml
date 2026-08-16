@@ -1,21 +1,84 @@
+# Codacy Coverage - publishing only. This workflow no longer runs the test
+# suite on pull requests.
+#
+# AWS CodeBuild (adaptixcore-temporal-service-pr-validation) is the authoritative test gate and already runs the
+# whole suite. It now also produces coverage.xml and uploads it to S3, so this
+# workflow downloads that artifact and publishes it instead of executing pytest
+# a second time.
+#
+# The Codacy project token deliberately stays here. It is per-repository, has no
+# organization-level equivalent, and GitHub secret VALUES are write-only through
+# the API, so it cannot be migrated into AWS. Publishing a report is not CI
+# behaviour; running the suite is, and that has moved to CodeBuild.
 name: Codacy Coverage
+
 on:
+  # PR coverage arrives via the CodeBuild commit status, NOT via pull_request.
+  # Actions and CodeBuild start at the same moment on a PR, so a pull_request
+  # trigger would try to download an artifact that does not exist yet.
+  status:
+  # Main-branch coverage still runs here. There is no main-validation CodeBuild
+  # project for this repo, so removing this would silently drop coverage for
+  # main. Retained until a CodeBuild main-branch gate exists to produce it.
   push:
     branches: [main]
-  pull_request:
+
 permissions:
   contents: read
+
 jobs:
-  coverage:
+  publish-from-codebuild:
+    if: >-
+      github.event_name == 'status' &&
+      github.event.state == 'success' &&
+      startsWith(github.event.context, 'AWS CodeBuild us-east-1 (adaptixcore-temporal-service-pr-validation')
     runs-on: ubuntu-latest
-    # Mapped to `env` so the step-level `if:` below can read it: the `secrets`
-    # context is NOT available in a step-level `if:`, so `if: secrets.X != ''`
-    # would evaluate false on EVERY run and skip the upload on main too.
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      COVERAGE_BUCKET: adaptixcore-security-scan-reports-793439286972
+      COVERAGE_PREFIX: coverage/temporal-service
+      COMMIT_SHA: ${{ github.event.sha }}
+      CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
+    steps:
+      - name: Configure AWS credentials via GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download the coverage produced by the authoritative gate
+        run: |
+          set -euo pipefail
+          # Keyed per commit: a fixed key would let concurrent PR builds
+          # overwrite each other and publish one PR's coverage as another's.
+          KEY="${COVERAGE_PREFIX}/coverage-${COMMIT_SHA}/coverage.xml"
+          echo "fetching s3://${COVERAGE_BUCKET}/${KEY}"
+          aws s3 cp "s3://${COVERAGE_BUCKET}/${KEY}" coverage.xml
+          test -s coverage.xml
+
+      - name: Upload coverage to Codacy
+        if: env.CODACY_PROJECT_TOKEN != ''
+        uses: codacy/codacy-coverage-reporter-action@89d6c85cfafaec52c72b6c5e8b2878d33104c699 # v1.3.0
+        with:
+          project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
+          coverage-reports: coverage.xml
+
+      - name: Report skipped upload
+        if: env.CODACY_PROJECT_TOKEN == ''
+        run: |
+          echo "Codacy upload SKIPPED: CODACY_PROJECT_TOKEN is not available."
+
+  coverage-on-main:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
     env:
       CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
       - name: Install dependencies
@@ -23,29 +86,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest pytest-asyncio pytest-cov pytest-xdist aiosqlite httpx
           pip install -e backend || true
-          pip install -e "backend[test]" || true
           pip install -e "backend[dev]" || true
-          for f in $(find . -maxdepth 3 -name "requirements*.txt" -not -path "*/node_modules/*" -not -path "*/.git/*"); do pip install -r "$f" || true; done
       - name: Run tests with coverage
         working-directory: backend
-        continue-on-error: true
         run: python -m pytest --cov=temporal_app --cov-report=xml:coverage.xml -q
       - name: Normalize coverage paths
         working-directory: backend
         run: |
-          if [ -f coverage.xml ]; then sed -i 's#filename="temporal_app/#filename="backend/temporal_app/#g' coverage.xml; else echo "no coverage.xml"; exit 1; fi
+          if [ -f coverage.xml ]; then
+            sed -i 's#filename="temporal_app/#filename="backend/temporal_app/#g' coverage.xml
+          else
+            echo "no coverage.xml"; exit 1
+          fi
       - name: Upload coverage to Codacy
         if: env.CODACY_PROJECT_TOKEN != ''
-        uses: codacy/codacy-coverage-reporter-action@89d6c85cfafaec52c72b6c5e8b2878d33104c699 # v1
+        uses: codacy/codacy-coverage-reporter-action@89d6c85cfafaec52c72b6c5e8b2878d33104c699 # v1.3.0
         with:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
           coverage-reports: backend/coverage.xml
-
-      # Never skip silently: a repo whose token was revoked must not look
-      # identical to a healthy one.
-      - name: Report skipped coverage upload
+      - name: Report skipped upload
         if: env.CODACY_PROJECT_TOKEN == ''
         run: |
-          echo "Codacy upload SKIPPED: CODACY_PROJECT_TOKEN is not available to this run."
-          echo "Expected for Dependabot and fork pull requests, which cannot read repository Actions secrets."
-          echo "Tests ran and the coverage report was produced; coverage uploads on the post-merge push run."
+          echo "Codacy upload SKIPPED: CODACY_PROJECT_TOKEN is not available."

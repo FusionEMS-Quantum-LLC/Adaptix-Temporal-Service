@@ -98,7 +98,24 @@ phases:
         # Parallelise the full suite (-n auto) so it fits the CodeBuild timeout
         # on SMALL compute (serial run BUILD_TIMED_OUT). Backend dir autodetected.
         BD=$(for d in backend core/backend src .; do [ -d "$d/tests" ] && { echo "$d"; break; }; done)
-        cd "${BD:-backend}" && python -m pytest -q --no-header --tb=line -n auto
+        BD="${BD:-backend}"
+        # Coverage is generated HERE, in the authoritative test run, so GitHub
+        # Actions no longer re-runs the whole suite just to produce coverage.xml.
+        cd "$BD" && python -m pytest -q --no-header --tb=line -n auto --cov=temporal_app --cov-report=xml:coverage.xml
+        # Codacy resolves paths from the repository root, not from $BD.
+        sed -i 's#filename="temporal_app/#filename="'"$BD"'/temporal_app/#g' coverage.xml
+        # When $BD is "." (tests live at repo root), coverage.xml already IS
+        # $CODEBUILD_SRC_DIR/coverage.xml, so `cp` would fail with "same file".
+        [ "$BD" = "." ] || cp coverage.xml "$CODEBUILD_SRC_DIR/coverage.xml"
+
+# Published to s3://<coverage bucket>/coverage/temporal-service/ when the consumer sets
+# coverage_report_s3_bucket. Until then the project stays NO_ARTIFACTS.
+artifacts:
+  files:
+    - coverage.xml
+  # Keyed per commit so concurrent PR builds cannot overwrite each other.
+  name: coverage-$CODEBUILD_RESOLVED_SOURCE_VERSION
+  discard-paths: yes
 
 cache:
   paths:
