@@ -4,15 +4,23 @@ Reads TASK_QUEUE from the environment to determine which domain this worker
 instance handles. Each ECS task definition runs a single domain worker.
 
 Domain routing:
-  TASK_QUEUE=billing       -- billing workflows + billing activities
-  TASK_QUEUE=notifications -- notifications workflows + notification activities
-  TASK_QUEUE=documents     -- document workflows + document activities
-  TASK_QUEUE=onboarding    -- onboarding workflows + onboarding activities
+  TASK_QUEUE=billing        -- billing workflows + billing activities
+  TASK_QUEUE=notifications  -- notifications workflows + notification activities
+  TASK_QUEUE=documents      -- document workflows + document activities
+  TASK_QUEUE=onboarding     -- onboarding workflows + onboarding activities
+  TASK_QUEUE=migration      -- migration control plane (workflow + control activities)
+  TASK_QUEUE=migration-bulk -- migration bulk plane (backfill activity only, no
+                               workflows: bulk work is dispatched to this queue
+                               by MigrationWorkflow so it cannot starve the
+                               control plane or live revenue work)
 
 Startup:
   1. Validate required configuration (TEMPORAL_HOST, TASK_QUEUE,
-     ADAPTIX_API_BASE, ADAPTIX_SERVICE_TOKEN). Exit 1 if any are missing.
-  2. Connect to Temporal server at TEMPORAL_HOST, namespace TEMPORAL_NAMESPACE.
+     ADAPTIX_API_BASE, CORE_PROVISIONING_TOKEN, CORE_SERVICE_URL,
+     TEMPORAL_PAYLOAD_CODEC_KEY). Exit 1 if any are missing.
+  2. Connect to Temporal server via temporal_app.client.connect_temporal_client,
+     which applies the encrypting payload codec. A worker that cannot encrypt
+     payloads never reaches a task queue.
   3. Construct Worker with the domain-appropriate workflow and activity lists.
   4. Run the worker and block until SIGINT/SIGTERM.
 
@@ -39,7 +47,10 @@ import sys
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+from temporal_app.client import connect_temporal_client
 from temporal_app.config import (
+    MIGRATION_BULK_TASK_QUEUE,
+    MIGRATION_TASK_QUEUE,
     TASK_QUEUE,
     TEMPORAL_HOST,
     TEMPORAL_NAMESPACE,
@@ -57,6 +68,9 @@ from temporal_app.workflows.document_workflows import (
     GeneratePDFWorkflow,
     PostGridDeliveryWorkflow,
     TrustSignWorkflow,
+)
+from temporal_app.workflows.migration import (
+    MigrationWorkflow,
 )
 from temporal_app.workflows.notification_workflows import (
     SendBatchStatementsWorkflow,
@@ -85,6 +99,15 @@ from temporal_app.activities.document_activities import (
     initiate_trustsign_envelope,
     poll_trustsign_status,
     send_statement_via_postgrid,
+)
+from temporal_app.activities.migration_activities import (
+    backfill_migration_history,
+    build_field_mapping,
+    profile_source_dataset,
+    promote_migration_cutover,
+    reconcile_migration,
+    rollback_migration,
+    run_migration_dry_run,
 )
 from temporal_app.activities.onboarding_activities import (
     complete_onboarding_step,
@@ -204,9 +227,49 @@ def _build_worker(client: Client, task_queue: str) -> Worker:
             max_concurrent_activities=WORKER_MAX_CONCURRENT_ACTIVITY_TASKS,
         )
 
+    if task_queue == MIGRATION_TASK_QUEUE:
+        # Migration control plane: the durable state machine plus the
+        # low-volume, latency-sensitive activities that support it. Bulk
+        # backfill is deliberately absent — it belongs to migration-bulk.
+        return Worker(
+            client,
+            task_queue=task_queue,
+            workflows=[
+                MigrationWorkflow,
+            ],
+            activities=[
+                profile_source_dataset,
+                build_field_mapping,
+                run_migration_dry_run,
+                reconcile_migration,
+                promote_migration_cutover,
+                rollback_migration,
+            ],
+            max_concurrent_workflow_tasks=WORKER_MAX_CONCURRENT_WORKFLOW_TASKS,
+            max_concurrent_activities=WORKER_MAX_CONCURRENT_ACTIVITY_TASKS,
+        )
+
+    if task_queue == MIGRATION_BULK_TASK_QUEUE:
+        # Migration bulk plane: history backfill ONLY, and no workflows.
+        # MigrationWorkflow runs on the migration queue and dispatches backfill
+        # activities here by task queue, so this worker's slots can be saturated
+        # by a multi-million-record backfill without delaying a cutover approval
+        # or any live revenue workflow.
+        return Worker(
+            client,
+            task_queue=task_queue,
+            workflows=[],
+            activities=[
+                backfill_migration_history,
+            ],
+            max_concurrent_workflow_tasks=WORKER_MAX_CONCURRENT_WORKFLOW_TASKS,
+            max_concurrent_activities=WORKER_MAX_CONCURRENT_ACTIVITY_TASKS,
+        )
+
     raise ValueError(
-        f"Unrecognised TASK_QUEUE value '{task_queue}'. "
-        "Valid values: billing | notifications | documents | onboarding"
+        f"Unrecognised TASK_QUEUE value '{task_queue}'. Valid values: "
+        "billing | notifications | documents | onboarding | migration | "
+        "migration-bulk"
     )
 
 
@@ -235,10 +298,7 @@ async def main() -> None:
     )
 
     try:
-        client = await Client.connect(
-            TEMPORAL_HOST,
-            namespace=TEMPORAL_NAMESPACE,
-        )
+        client = await connect_temporal_client()
     except Exception as exc:
         logger.error(
             "temporal_worker.connect_failed host=%s error=%s",

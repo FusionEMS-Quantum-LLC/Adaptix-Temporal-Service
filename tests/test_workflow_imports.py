@@ -67,7 +67,6 @@ def test_onboarding_workflows_import():
 
 def test_worker_dispatcher_imports():
     """worker.py dispatcher module imports without error using updated module paths."""
-    import importlib
     import sys
 
     # Remove cached modules to force a clean import.
@@ -84,7 +83,6 @@ def test_worker_dispatcher_imports():
 
 def test_worker_entrypoints_import():
     """All four worker entrypoint modules import without error."""
-    import importlib
     import sys
 
     for mod_name in list(sys.modules.keys()):

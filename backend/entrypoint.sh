@@ -5,7 +5,7 @@ TASK_QUEUE="${TASK_QUEUE:-}"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
 
 if [ -z "${TASK_QUEUE}" ]; then
-    echo '{"level":"ERROR","message":"TASK_QUEUE is required. Set it to billing|notifications|documents|onboarding in the ECS task definition."}'
+    echo '{"level":"ERROR","message":"TASK_QUEUE is required. Set it to billing|notifications|documents|onboarding|migration|migration-bulk in the ECS task definition."}'
     exit 1
 fi
 
@@ -23,6 +23,13 @@ if [ -z "${ADAPTIX_SERVICE_TOKEN:-}" ]; then
     echo '{"level":"ERROR","message":"ADAPTIX_SERVICE_TOKEN is required. Set it via AWS Secrets Manager in the ECS task definition."}'
     exit 1
 fi
+
+# TEMPORAL_PAYLOAD_CODEC_KEY is deliberately NOT gated here. It is required, but
+# its rule has a conditional branch (the explicit local-development plaintext
+# flag, which is itself refused when ENVIRONMENT is production). Encoding that
+# branch twice — once in shell, once in temporal_app.config.validate_config —
+# would let the two copies drift. validate_config runs a few lines into every
+# worker entrypoint, fails closed, and prints the actionable message.
 
 echo "{\"level\":\"INFO\",\"message\":\"Starting Adaptix Temporal worker\",\"task_queue\":\"${TASK_QUEUE}\"}"
 
