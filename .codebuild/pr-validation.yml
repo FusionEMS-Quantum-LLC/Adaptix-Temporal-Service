@@ -104,7 +104,9 @@ phases:
         cd "$BD" && python -m pytest -q --no-header --tb=line -n auto --cov=temporal_app --cov-report=xml:coverage.xml
         # Codacy resolves paths from the repository root, not from $BD.
         sed -i 's#filename="temporal_app/#filename="'"$BD"'/temporal_app/#g' coverage.xml
-        cp coverage.xml "$CODEBUILD_SRC_DIR/coverage.xml"
+        # When $BD is "." (tests live at repo root), coverage.xml already IS
+        # $CODEBUILD_SRC_DIR/coverage.xml, so `cp` would fail with "same file".
+        [ "$BD" = "." ] || cp coverage.xml "$CODEBUILD_SRC_DIR/coverage.xml"
 
 # Published to s3://<coverage bucket>/coverage/temporal-service/ when the consumer sets
 # coverage_report_s3_bucket. Until then the project stays NO_ARTIFACTS.
