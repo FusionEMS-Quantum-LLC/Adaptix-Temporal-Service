@@ -101,7 +101,7 @@ phases:
         BD="${BD:-backend}"
         # Coverage is generated HERE, in the authoritative test run, so GitHub
         # Actions no longer re-runs the whole suite just to produce coverage.xml.
-        cd "$BD" && python -m pytest -q --no-header --tb=line -n auto \n          --cov=temporal_app --cov-report=xml:coverage.xml
+        cd "$BD" && python -m pytest -q --no-header --tb=line -n auto --cov=temporal_app --cov-report=xml:coverage.xml
         # Codacy resolves paths from the repository root, not from $BD.
         sed -i 's#filename="temporal_app/#filename="'"$BD"'/temporal_app/#g' coverage.xml
         cp coverage.xml "$CODEBUILD_SRC_DIR/coverage.xml"
