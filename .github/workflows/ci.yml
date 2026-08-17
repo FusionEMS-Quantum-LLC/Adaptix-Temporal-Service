@@ -1,6 +1,7 @@
 # ci.yml — optimized CI gate (Python/FastAPI services).
 # Replaces AWS CodeBuild pr-validation.yml + security-scan.yml.
 # Target: < 90s wall-clock via parallel jobs + shallow clone + uv cache.
+# Deps updated: 2026-08-17.
 
 name: ci
 
@@ -74,12 +75,12 @@ jobs:
             .mypy_cache
           key: mypy-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('**/requirements-dev.lock') }}
           restore-keys: mypy-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
-      - name: Install dependencies (frozen)
+      - name: Install dependencies
         run: |
           BD=$(for d in backend core/backend src .; do [ -d "$d" ] && [ -f "$d/pyproject.toml" ] && echo "$d" && break; done)
           BD="${BD:-.}"
           if [ -f "$BD/requirements-dev.lock" ]; then
-            uv pip install --system --quiet --frozen -r "$BD/requirements-dev.lock"
+            uv pip install --system --quiet -r "$BD/requirements-dev.lock"
             uv pip install --system --quiet --no-deps -e "$BD"
           else
             uv pip install --system --quiet mypy==2.3.0
@@ -120,19 +121,19 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: "**/requirements-dev.lock"
-      - name: Install dependencies (frozen)
+      - name: Install dependencies
         run: |
           BD=$(for d in backend core/backend src .; do [ -d "$d" ] && [ -f "$d/pyproject.toml" ] && echo "$d" && break; done)
           BD="${BD:-.}"
           if [ -f "$BD/requirements-dev.lock" ]; then
-            uv pip install --system --quiet --frozen -r "$BD/requirements-dev.lock"
+            uv pip install --system --quiet -r "$BD/requirements-dev.lock"
             uv pip install --system --quiet --no-deps -e "$BD"
           else
             uv pip install --system --quiet pytest pytest-asyncio pytest-cov pytest-xdist aiosqlite httpx
             uv pip install --system --quiet -e "$BD" || true
           fi
-          # psycopg2-binary: sync postgres driver required by some test modules at import time.
-          # asyncpg is the async runtime driver but psycopg2 is still imported by db.py.
+          # psycopg2-binary: sync postgres driver required at import time by some
+          # test modules even when asyncpg is the async runtime driver.
           uv pip install --system --quiet psycopg2-binary
       - name: Lock drift gate
         run: |
