@@ -1,8 +1,6 @@
-# ci.yml — optimized CI gate for Adaptix-AI-Service.
-#
+# ci.yml — optimized CI gate (Python/FastAPI services).
 # Replaces AWS CodeBuild pr-validation.yml + security-scan.yml.
-# PERFORMANCE: parallel jobs + shallow clone + uv cache + minimal installs.
-# Target: < 90s wall-clock.
+# Target: < 90s wall-clock via parallel jobs + shallow clone + uv cache.
 
 name: ci
 
@@ -25,7 +23,6 @@ env:
   PYTHONUNBUFFERED: "1"
 
 jobs:
-  # ── lint: only ruff, only ruff deps — fastest possible ───────────────
   lint:
     name: lint
     runs-on: ubuntu-latest
@@ -34,33 +31,26 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 1
-
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-
-      - uses: astral-sh/setup-uv@c7f87aa956e4c323abf06d5dec078e358f6b4d04 # v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: "**/requirements-dev.lock"
-
-      # Lint only needs ruff — skip the full 200-package dev-dep install.
-      # On cache hit this step takes ~2s.
+      # Lint only needs ruff — skip the full dev-dep install entirely (~25s saved).
       - name: Install ruff (pinned)
         run: uv pip install --system ruff==0.15.20
-
       - name: Ruff lint
         run: |
           BD=$(for d in backend core/backend src .; do [ -d "$d" ] && [ -f "$d/pyproject.toml" ] && echo "$d" && break; done)
           cd "${BD:-.}" && ruff check .
-
       - name: Ruff format check
         run: |
           BD=$(for d in backend core/backend src .; do [ -d "$d" ] && [ -f "$d/pyproject.toml" ] && echo "$d" && break; done)
           cd "${BD:-.}" && ruff format --check .
 
-  # ── typecheck: full deps needed for mypy to resolve imports ───────────
   typecheck:
     name: typecheck
     runs-on: ubuntu-latest
@@ -69,26 +59,21 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 1
-
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-
-      - uses: astral-sh/setup-uv@c7f87aa956e4c323abf06d5dec078e358f6b4d04 # v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: "**/requirements-dev.lock"
-
-      # mypy cache — warm hits skip re-checking unchanged modules.
-      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             backend/.mypy_cache
             .mypy_cache
           key: mypy-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('**/requirements-dev.lock') }}
           restore-keys: mypy-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
-
       - name: Install dependencies (frozen)
         run: |
           BD=$(for d in backend core/backend src .; do [ -d "$d" ] && [ -f "$d/pyproject.toml" ] && echo "$d" && break; done)
@@ -100,20 +85,18 @@ jobs:
             uv pip install --system --quiet mypy==2.3.0
             uv pip install --system --quiet -e "$BD" || true
           fi
-
       - name: Mypy
         run: |
           BD=$(for d in backend core/backend src .; do [ -d "$d" ] && [ -f "$d/pyproject.toml" ] && echo "$d" && break; done)
           cd "${BD:-.}" && mypy --ignore-missing-imports .
 
-  # ── test: full deps + postgres service container ───────────────────────
   test:
     name: test
     runs-on: ubuntu-latest
     timeout-minutes: 2
     services:
       postgres:
-        image: postgres:16-alpine  # alpine = smaller, starts ~2s faster
+        image: postgres:16-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: ci
@@ -129,17 +112,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 1
-
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-
-      - uses: astral-sh/setup-uv@c7f87aa956e4c323abf06d5dec078e358f6b4d04 # v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: "**/requirements-dev.lock"
-
       - name: Install dependencies (frozen)
         run: |
           BD=$(for d in backend core/backend src .; do [ -d "$d" ] && [ -f "$d/pyproject.toml" ] && echo "$d" && break; done)
@@ -151,7 +131,9 @@ jobs:
             uv pip install --system --quiet pytest pytest-asyncio pytest-cov pytest-xdist aiosqlite httpx
             uv pip install --system --quiet -e "$BD" || true
           fi
-
+          # psycopg2-binary: sync postgres driver required by some test modules at import time.
+          # asyncpg is the async runtime driver but psycopg2 is still imported by db.py.
+          uv pip install --system --quiet psycopg2-binary
       - name: Lock drift gate
         run: |
           BD=$(for d in backend core/backend src .; do [ -d "$d" ] && [ -f "$d/uv.lock" ] && echo "$d" && break; done)
@@ -166,8 +148,7 @@ jobs:
               exit 1
             fi
           fi
-
-      - name: Pytest (-n auto = parallel workers)
+      - name: Pytest (-n auto)
         env:
           AI_MIGRATION_TEST_DATABASE_URL: postgresql://postgres:ci@localhost:5432/test_db
           DATABASE_URL: postgresql://postgres:ci@localhost:5432/test_db
@@ -175,7 +156,6 @@ jobs:
           BD=$(for d in backend core/backend src .; do [ -d "$d/tests" ] && echo "$d" && break; done)
           cd "${BD:-.}" && python -m pytest -q --no-header --tb=line -n auto
 
-  # ── security: gitleaks (no python setup) + bandit + pip-audit ─────────
   security:
     name: security
     runs-on: ubuntu-latest
@@ -183,38 +163,28 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          fetch-depth: 0  # full history required for gitleaks range scan
-
-      # Gitleaks needs no Python setup — standalone binary via action.
-      - name: Gitleaks (secrets — BLOCKING)
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907078de3127a2 # v2
+          fetch-depth: 0
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
-
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-
-      - uses: astral-sh/setup-uv@c7f87aa956e4c323abf06d5dec078e358f6b4d04 # v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: "**/requirements-dev.lock"
-
-      - name: Bandit (high-severity app security — BLOCKING)
+      - name: Bandit (high-severity)
         run: |
           uv pip install --system --quiet bandit
           TARGETS=()
           for d in backend core/backend src; do [ -d "$d" ] && TARGETS+=("$d"); done
-          if [ ${#TARGETS[@]} -eq 0 ]; then
-            echo "WARN: no python source dirs; bandit skipped"
-          else
-            bandit -r "${TARGETS[@]}" -lll -iii \
-              --exclude '**/tests/**,**/test_*.py,**/migrations/**'
-          fi
-
-      - name: pip-audit (dependency CVEs — REPORT-ONLY)
+          if [ ${#TARGETS[@]} -eq 0 ]; then echo "WARN: no python dirs; skipped"
+          else bandit -r "${TARGETS[@]}" -lll -iii --exclude '**/tests/**,**/test_*.py,**/migrations/**'; fi
+      - name: pip-audit (report-only)
         continue-on-error: true
         run: |
           uv pip install --system --quiet pip-audit
