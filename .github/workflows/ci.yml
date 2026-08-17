@@ -1,0 +1,15 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  ci:
+    uses: FusionEMS-Quantum-LLC/.github/.github/workflows/reusable-python-service-ci.yml@feat/reusable-python-ci-workflows
+    with:
+      cov_package: temporal_app
+  security-scan:
+    uses: FusionEMS-Quantum-LLC/.github/.github/workflows/reusable-python-security-scan.yml@feat/reusable-python-ci-workflows
