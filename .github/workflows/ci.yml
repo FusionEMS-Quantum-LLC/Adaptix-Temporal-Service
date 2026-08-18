@@ -162,9 +162,9 @@ jobs:
           fi
       - name: Pytest
         env:
-          DATABASE_URL: postgresql+asyncpg://postgres:ci@localhost:5432/test_db
-          AI_MIGRATION_TEST_DATABASE_URL: postgresql+asyncpg://postgres:ci@localhost:5432/test_db
-          SYNC_DATABASE_URL: postgresql://postgres:ci@localhost:5432/test_db
+          DATABASE_URL: postgresql+asyncpg://postgres:ci@localhost:5432/test_db?ssl=disable
+          AI_MIGRATION_TEST_DATABASE_URL: postgresql+asyncpg://postgres:ci@localhost:5432/test_db?ssl=disable
+          SYNC_DATABASE_URL: postgresql://postgres:ci@localhost:5432/test_db?sslmode=disable
         run: |
           BD=$(for d in backend core/backend src .; do [ -d "$d/tests" ] && echo "$d" && break; done)
           BD="${BD:-.}"
