@@ -279,3 +279,101 @@ async def test_list_recipients_empty_on_no_recipients():
             )
 
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Telnyx billing-scope header
+#
+# Adaptix-Communications-Service gates /sms/send with require_billing_scope
+# (communications_app/security/telnyx_scope.py). It answers 403 to any request
+# that omits X-Adaptix-Comm-Purpose or names a purpose outside ALLOWED_PURPOSES.
+# This activity previously sent only the Bearer token, so every automated
+# billing SMS was rejected before it ever reached Telnyx.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_send_sms_carries_the_telnyx_billing_purpose_header():
+    """The SMS send must declare an allowed Telnyx billing purpose."""
+    from temporal_app.activities import notification_activities
+
+    mock_response = _make_response(200, {"message_sid": "SM999"})
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    with (
+        _patch_auth(),
+        patch(
+            "temporal_app.activities.notification_activities.httpx.AsyncClient"
+        ) as mock_cls,
+    ):
+        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        with patch("temporalio.activity.heartbeat"):
+            await notification_activities.send_sms_notification(
+                to="+15555551234",
+                message="Your balance is due",
+                notification_category="billing_payment_due",
+            )
+
+    headers = mock_client.post.call_args.kwargs["headers"]
+    assert headers["X-Adaptix-Comm-Purpose"] == "billing_payment_reminder"
+    # The minted system JWT must survive alongside the new header.
+    assert headers["Authorization"] == "Bearer test-minted"
+
+
+@pytest.mark.parametrize(
+    "category",
+    [
+        "billing_statement_reminder",
+        "billing_payment_due",
+        "billing_plan_installment",
+        "billing_late_notice",
+    ],
+)
+@pytest.mark.asyncio
+async def test_every_allowed_category_sends_the_purpose_header(category):
+    """No allowed category may reach Communications without the purpose header."""
+    from temporal_app.activities import notification_activities
+
+    mock_response = _make_response(200, {"message_sid": "SM000"})
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    with (
+        _patch_auth(),
+        patch(
+            "temporal_app.activities.notification_activities.httpx.AsyncClient"
+        ) as mock_cls,
+    ):
+        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        with patch("temporalio.activity.heartbeat"):
+            await notification_activities.send_sms_notification(
+                to="+15555551234",
+                message="Balance reminder",
+                notification_category=category,
+            )
+
+    headers = mock_client.post.call_args.kwargs["headers"]
+    assert headers["X-Adaptix-Comm-Purpose"] == "billing_payment_reminder"
+
+
+def test_purpose_constant_is_in_the_services_allowed_set():
+    """Guard the lockstep with communications_app telnyx_scope.ALLOWED_PURPOSES.
+
+    Duplicated here rather than imported: Adaptix-Temporal-Service does not
+    depend on Adaptix-Communications-Service. If that service's allow-list
+    changes, this test is the tripwire.
+    """
+    from temporal_app.activities import notification_activities
+
+    allowed_purposes = {
+        "billing_helpdesk",
+        "billing_payment_reminder",
+        "billing_status_text",
+        "billing_support_callback",
+        "billing_fax",
+    }
+    assert notification_activities._SMS_COMM_PURPOSE in allowed_purposes
+    assert notification_activities._COMM_PURPOSE_HEADER == "X-Adaptix-Comm-Purpose"

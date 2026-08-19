@@ -51,6 +51,22 @@ _ALLOWED_SMS_CATEGORIES: frozenset[str] = frozenset(
     }
 )
 
+# Adaptix-Communications-Service gates every Telnyx-backed route with
+# ``require_billing_scope`` (communications_app/security/telnyx_scope.py),
+# enforcing the founder directive that Telnyx carries billing communications
+# only. It reads ``X-Adaptix-Comm-Purpose`` and answers 403 to any request that
+# omits it or names a purpose outside its ALLOWED_PURPOSES. This activity sent
+# only a Bearer token, so every automated billing SMS was rejected before it
+# reached Telnyx.
+#
+# Every category in _ALLOWED_SMS_CATEGORIES above is accounts-receivable
+# dunning — a statement reminder, a payment due date, a payment-plan
+# installment, a late notice — so ``billing_payment_reminder`` is the accurate
+# classification for all four. Keep this value in lockstep with
+# ALLOWED_PURPOSES in that module.
+_COMM_PURPOSE_HEADER = "X-Adaptix-Comm-Purpose"
+_SMS_COMM_PURPOSE = "billing_payment_reminder"
+
 
 async def _auth_header() -> dict[str, str]:
     """Return the Authorization header carrying a minted system JWT.
@@ -232,7 +248,10 @@ async def send_sms_notification(
                     "to_number": to,
                     "body": message,
                 },
-                headers=await _auth_header(),
+                headers={
+                    **(await _auth_header()),
+                    _COMM_PURPOSE_HEADER: _SMS_COMM_PURPOSE,
+                },
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
