@@ -10,6 +10,13 @@ What these tests prove:
   - Missing CORE_SERVICE_URL / CORE_PROVISIONING_TOKEN -> non-retryable error.
   - 401/403 from the mint route -> non-retryable SystemTokenError.
 
+  - The client asserts its own caller identity (defaulting to config.TASK_QUEUE)
+    on every mint request, so Core can bind authority to who is asking
+    (companion to the Adaptix-Core-Service caller-scoped authorization fix,
+    2026-08-20).
+  - A 403 detail from Core (e.g. "caller not permitted to request scope") is
+    surfaced in the raised error instead of a generic guess.
+
 What these tests do NOT prove:
   - Live behavior against a deployed Core service.
   - Gateway acceptance of the minted token at runtime.
@@ -186,6 +193,52 @@ async def test_403_is_non_retryable_error(patch_async_client) -> None:
 
 
 @pytest.mark.asyncio
+async def test_403_surfaces_cores_own_rejection_detail(patch_async_client) -> None:
+    """Companion to the Core-Service caller-scoped authorization fix: a 403
+    can now mean Core's resolve_scope rejected this caller/scope combination,
+    not only a bad CORE_PROVISIONING_TOKEN. The real reason must be visible
+    in the raised error, not papered over with a generic guess."""
+
+    class _DeniedRecorder(_MintRecorder):
+        def handler(self, request: httpx.Request) -> httpx.Response:
+            self.calls.append(request)
+            return httpx.Response(
+                403,
+                json={"detail": "Caller 'billing' is not permitted to request scope 'onboarding'."},
+            )
+
+    rec = _DeniedRecorder()
+    patch_async_client(rec)
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN
+    )
+    with pytest.raises(SystemTokenError, match="not permitted to request scope 'onboarding'"):
+        await client.get_token(scope=["onboarding"])
+
+
+@pytest.mark.asyncio
+async def test_403_with_unparsable_body_falls_back_to_generic_message(
+    patch_async_client,
+) -> None:
+    """A malformed/non-JSON 403 body must not crash the client — it falls
+    back to the generic message rather than raising from inside the error
+    handler itself."""
+
+    class _BrokenBodyRecorder(_MintRecorder):
+        def handler(self, request: httpx.Request) -> httpx.Response:
+            self.calls.append(request)
+            return httpx.Response(403, content=b"not json")
+
+    rec = _BrokenBodyRecorder()
+    patch_async_client(rec)
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN
+    )
+    with pytest.raises(SystemTokenError, match="check CORE_PROVISIONING_TOKEN"):
+        await client.get_token()
+
+
+@pytest.mark.asyncio
 async def test_missing_core_service_url_raises() -> None:
     client = SystemTokenClient(core_service_url="", provisioning_token=_PROV_TOKEN)
     with pytest.raises(SystemTokenError):
@@ -228,8 +281,14 @@ async def test_provisioning_token_and_jwt_not_logged(
 
 
 @pytest.mark.asyncio
-async def test_default_scope_sends_empty_mint_body(patch_async_client) -> None:
-    """With no scope the mint body is empty (Core defaults to ["system"])."""
+async def test_default_scope_sends_only_caller_in_mint_body(patch_async_client) -> None:
+    """With no scope requested, the mint body carries no 'scope' key (Core
+    defaults to ["system"]) but DOES carry this worker's own 'caller'
+    identity — sent unconditionally so Core's audit trail can attribute
+    every mint, even the unprivileged default one, to the requesting worker.
+    tests/conftest.py sets TASK_QUEUE=billing for this suite, so that is the
+    caller value the client defaults to (SystemTokenClient(caller=...) is not
+    passed here, exactly like a real worker never overrides it)."""
     import json as _json
 
     rec = _MintRecorder()
@@ -240,15 +299,16 @@ async def test_default_scope_sends_empty_mint_body(patch_async_client) -> None:
 
     await client.get_token()
     body = _json.loads(rec.calls[0].content.decode() or "{}")
-    assert body == {}
+    assert body == {"caller": "billing"}
 
 
 @pytest.mark.asyncio
-async def test_scope_is_sent_in_mint_body(patch_async_client) -> None:
-    """A requested scope is forwarded to Core as {"scope": [...]}.
-
-    This is the contract the Billing worker relies on to obtain a
-    billing_operator-scoped token.
+async def test_scope_and_caller_are_sent_in_mint_body(patch_async_client) -> None:
+    """A requested scope is forwarded to Core as {"scope": [...]}, alongside
+    this worker's own caller identity — the contract the Billing worker
+    relies on to obtain a billing_operator-scoped token that Core will
+    actually grant (Core now requires a recognised caller for some scopes
+    and confines an identified caller to its own domain for all of them).
     """
     import json as _json
 
@@ -261,7 +321,102 @@ async def test_scope_is_sent_in_mint_body(patch_async_client) -> None:
     header = await client.auth_header(scope=["billing_operator"])
     assert header == {"Authorization": f"Bearer {_SYSTEM_JWT}"}
     body = _json.loads(rec.calls[0].content.decode() or "{}")
-    assert body == {"scope": ["billing_operator"]}
+    assert body == {"scope": ["billing_operator"], "caller": "billing"}
+
+
+@pytest.mark.asyncio
+async def test_caller_defaults_from_task_queue_config(patch_async_client, monkeypatch) -> None:
+    """Explicit proof the caller identity is sourced from config.TASK_QUEUE
+    (already required + validated against VALID_TASK_QUEUES at worker
+    startup), not hardcoded or guessed — an onboarding-worker process must
+    assert 'onboarding', not 'billing'.
+
+    Patches TASK_QUEUE via temporal_app.system_token_client's OWN bound
+    `config` reference (module.config, not a fresh `from temporal_app import
+    config`) — test_config.py's _reload_config() helper replaces
+    sys.modules["temporal_app.config"] with a brand new module object via
+    del+reimport, which orphans any `from temporal_app import config`
+    binding other modules already hold (system_token_client's included).
+    Going through system_token_client's own reference is what
+    SystemTokenClient.__init__ actually reads, so this stays correct
+    regardless of suite ordering / whether test_config.py ran first.
+    """
+    import json as _json
+
+    from temporal_app import system_token_client as stc_module
+
+    monkeypatch.setattr(stc_module.config, "TASK_QUEUE", "onboarding")
+    rec = _MintRecorder()
+    patch_async_client(rec)
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN
+    )
+    await client.get_token(scope=["onboarding"])
+
+    body = _json.loads(rec.calls[0].content.decode() or "{}")
+    assert body == {"scope": ["onboarding"], "caller": "onboarding"}
+
+
+@pytest.mark.asyncio
+async def test_explicit_caller_overrides_task_queue_default(patch_async_client) -> None:
+    """An explicit caller=... constructor argument wins over config.TASK_QUEUE
+    (mirrors how core_service_url/provisioning_token already override their
+    config defaults) — used by tests and any future explicit-identity caller."""
+    import json as _json
+
+    rec = _MintRecorder()
+    patch_async_client(rec)
+    # conftest.py sets TASK_QUEUE=billing; explicit caller must still win.
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL,
+        provisioning_token=_PROV_TOKEN,
+        caller="documents",
+    )
+    await client.get_token()
+    body = _json.loads(rec.calls[0].content.decode() or "{}")
+    assert body == {"caller": "documents"}
+
+
+@pytest.mark.asyncio
+async def test_caller_omitted_entirely_when_explicitly_blank(patch_async_client) -> None:
+    """An explicitly blank caller (e.g. a queue name that resolved empty) is
+    omitted from the body rather than sent as an empty string — Core treats
+    caller="" the same as an unrecognised caller (reject), so a genuinely
+    unset identity must look like "no caller asserted", matching the
+    pre-existing back-compat behaviour for scope-only callers."""
+    import json as _json
+
+    rec = _MintRecorder()
+    patch_async_client(rec)
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL,
+        provisioning_token=_PROV_TOKEN,
+        caller="",
+    )
+    await client.get_token()
+    body = _json.loads(rec.calls[0].content.decode() or "{}")
+    assert body == {}
+    assert "caller" not in body
+
+
+@pytest.mark.asyncio
+async def test_caller_sent_on_every_call_not_just_first(patch_async_client) -> None:
+    """Caller is a fixed per-process identity (not scope-keyed), so it must
+    appear on every mint call this client instance makes, regardless of which
+    distinct scope triggered that particular mint."""
+    import json as _json
+
+    rec = _MintRecorder()
+    patch_async_client(rec)
+    client = SystemTokenClient(
+        core_service_url=_CORE_URL, provisioning_token=_PROV_TOKEN
+    )
+    await client.get_token()  # default scope -> mint #1
+    await client.get_token(scope=["billing_operator"])  # distinct scope -> mint #2
+    assert len(rec.calls) == 2
+    for call in rec.calls:
+        body = _json.loads(call.content.decode() or "{}")
+        assert body.get("caller") == "billing"
 
 
 @pytest.mark.asyncio

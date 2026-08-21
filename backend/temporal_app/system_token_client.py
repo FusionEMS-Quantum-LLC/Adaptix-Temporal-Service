@@ -27,6 +27,26 @@ Security
 * The minted system JWT value is never logged.
 * This client is async-safe: concurrent callers share one in-flight mint via an
   asyncio lock so the provisioning token is not stamped repeatedly under load.
+
+Caller identity (companion to Adaptix-Core-Service security fix, 2026-08-20)
+------------------------------------------------------------------------------
+All four Temporal workers (billing, notifications, documents, onboarding)
+are provisioned from the identical ``CORE_PROVISIONING_TOKEN`` secret (see
+Adaptix-Infra ``temporal_workers.tf`` ``local.worker_common_secrets`` —
+every worker task definition points ``valueFrom`` at the same
+``core_service_token`` ARN). Authenticating with that shared token proves a
+caller is *an* authorised worker, not *which* worker. Core's mint route now
+requires a ``caller`` identity to grant a scope that carries founder
+authority (the ``onboarding`` scope) and, when a caller is asserted at all,
+confines it to its own domain's scope.
+
+This client now sends ``caller``, defaulting to this process's own
+``TASK_QUEUE`` (``config.TASK_QUEUE`` — already required and validated
+against ``VALID_TASK_QUEUES`` at startup; see ``config.validate()``). Each
+of the four worker ECS services runs as its own process with a fixed
+``TASK_QUEUE`` for its entire lifetime, so ``caller`` is effectively a
+per-process constant, not a per-call choice — a single worker process can
+never assert an identity other than its own deployed queue name.
 """
 
 from __future__ import annotations
@@ -54,6 +74,24 @@ class SystemTokenError(RuntimeError):
     """
 
 
+def _safe_error_detail(resp: httpx.Response) -> str | None:
+    """Best-effort extraction of FastAPI's ``{"detail": "..."}`` error body.
+
+    Never raises — an unparsable body just yields ``None`` so the caller
+    falls back to a generic message. The provisioning token is a bearer
+    header, never part of a JSON response body, so this cannot leak it.
+    """
+    try:
+        parsed = resp.json()
+    except ValueError:
+        return None
+    if isinstance(parsed, dict):
+        detail = parsed.get("detail")
+        if isinstance(detail, str) and detail:
+            return detail
+    return None
+
+
 @dataclass
 class _CachedToken:
     token: str
@@ -70,6 +108,7 @@ class SystemTokenClient:
         *,
         core_service_url: str | None = None,
         provisioning_token: str | None = None,
+        caller: str | None = None,
         refresh_skew_s: int | None = None,
         default_ttl_s: int | None = None,
         timeout_s: float | None = None,
@@ -84,6 +123,11 @@ class SystemTokenClient:
             if provisioning_token is not None
             else config.CORE_PROVISIONING_TOKEN
         )
+        # Identity this worker process asserts to Core's mint route (see the
+        # module docstring's "Caller identity" section). Defaults to this
+        # process's own TASK_QUEUE — never another worker's — so a single
+        # process can only ever claim to be itself.
+        self._caller = caller if caller is not None else (config.TASK_QUEUE or None)
         self._refresh_skew_s = (
             refresh_skew_s
             if refresh_skew_s is not None
@@ -99,7 +143,9 @@ class SystemTokenClient:
         )
         # Tokens are cached per requested scope. The default (no scope)
         # attribution token and a role-scoped token (e.g. ["billing_operator"])
-        # are distinct credentials and must not share a cache slot.
+        # are distinct credentials and must not share a cache slot. caller is
+        # NOT part of the key: it is a fixed per-process identity, never
+        # varies across calls on the same client instance.
         self._cached: dict[tuple[str, ...], _CachedToken] = {}
         self._lock = asyncio.Lock()
 
@@ -172,6 +218,14 @@ class SystemTokenClient:
         body: dict[str, object] = {}
         if key:
             body["scope"] = list(key)
+        # Assert this worker's own identity (see module docstring). Sent on
+        # every request, including the default/no-scope mint — harmless
+        # there since Core does not consult caller when no scope is
+        # requested. Omitted entirely when TASK_QUEUE is unset (e.g. a unit
+        # test constructing the client directly) rather than sending an
+        # empty string.
+        if self._caller:
+            body["caller"] = self._caller
         mint_started = time.monotonic()
         try:
             async with httpx.AsyncClient(timeout=self._timeout_s) as client:
@@ -183,9 +237,18 @@ class SystemTokenClient:
             ) from exc
 
         if resp.status_code in (401, 403):
+            # 401 is always a bad/missing CORE_PROVISIONING_TOKEN (get_service_auth).
+            # 403 can ALSO now mean Core's caller/scope authorization rejected this
+            # specific request (see core_app.auth.system_identity.resolve_scope) —
+            # e.g. this worker's caller identity is not permitted to request the
+            # scope it asked for. Surface Core's own detail when present instead
+            # of guessing, so the real cause (bad token vs. rejected scope/caller)
+            # is not misreported.
+            detail = _safe_error_detail(resp)
+            reason = detail or "check CORE_PROVISIONING_TOKEN"
             raise SystemTokenError(
-                f"system-token mint rejected with {resp.status_code} — check "
-                "CORE_PROVISIONING_TOKEN. This error is non-retryable."
+                f"system-token mint rejected with {resp.status_code} — {reason}. "
+                "This error is non-retryable."
             )
         if resp.status_code >= 400:
             raise SystemTokenError(
@@ -218,10 +281,12 @@ class SystemTokenClient:
         )
 
         logger.info(
-            "system_token_client: minted system token (ttl=%ds, refresh_skew=%ds, scope=%s); token value not logged",
+            "system_token_client: minted system token (ttl=%ds, refresh_skew=%ds, scope=%s, caller=%s); "
+            "token value not logged",
             ttl,
             skew,
             list(key) or ["system"],
+            self._caller,
         )
         return token
 
